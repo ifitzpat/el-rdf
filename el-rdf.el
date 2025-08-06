@@ -392,5 +392,5 @@ predobj)
  (shell-command (concat "dot /tmp/graph.dot -Tjson > " filename))
  filename)
 
-
+(provide 'el-rdf)
 ;;; el-rdf ends here
