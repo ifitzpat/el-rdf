@@ -1,0 +1,194 @@
+\input texinfo    @c -*- texinfo -*-
+@c %**start of header
+@setfilename README.info
+@settitle el-rdf
+@documentencoding UTF-8
+@documentlanguage en
+@c %**end of header
+
+@dircategory Emacs
+@direntry
+* el-rdf: (el-rdf).     el-rdf.
+@end direntry
+
+@finalout
+@titlepage
+@title el-rdf
+@author Ian FitzPatrick
+@end titlepage
+
+@contents
+
+@ifnottex
+@node Top
+@top el-rdf
+
+@strong{Disclaimer:} el-rdf is currently in alpha
+
+@end ifnottex
+
+@menu
+* Contents::
+* Features::
+* Screenshots::
+* Installation::
+* Usage::
+* Changelog::
+* Notes::
+* License::
+
+@detailmenu
+--- The Detailed Node Listing ---
+
+Installation
+
+* Dependencies::
+* Quelpa::
+
+Usage
+
+* Commands::
+
+Changelog
+
+* 0.0.1-alpha: 001-alpha. 
+
+Notes
+
+* Known issues::
+* Credits::
+
+@end detailmenu
+@end menu
+
+@node Contents
+@chapter Contents
+
+@itemize
+@item
+@item
+@item
+@item
+@item
+@item
+@end itemize
+
+@node Features
+@chapter Features
+
+@itemize
+@item
+placeholder
+@end itemize
+
+@emph{Planned features & improvements:}
+
+@itemize
+@item
+placeholder
+@end itemize
+
+@node Screenshots
+@chapter Screenshots
+
+Coming soon
+
+@node Installation
+@chapter Installation
+
+@menu
+* Dependencies::
+* Quelpa::
+@end menu
+
+@node Dependencies
+@section Dependencies
+
+@itemize
+@item
+placeholder
+@end itemize
+
+@node Quelpa
+@section Quelpa
+
+The package @samp{el-rdf} is not currently available from @uref{https://melpa.org/#/org-ql, MELPA}, but can be installed
+directly from github with @uref{https://framagit.org/steckerhalter/quelpa, Quelpa}.
+
+Installing with @uref{https://framagit.org/steckerhalter/quelpa, Quelpa} is easy:
+
+@enumerate
+@item
+Install @uref{https://framagit.org/steckerhalter/quelpa-use-package#installation, quelpa-use-package} (which can be installed directly from MELPA).
+@item
+Add this form to your init file:
+@end enumerate
+
+@lisp
+(use-package el-rdf
+  :quelpa (el-rdf :fetcher codeberg :repo "ifitzpat/el-rdf")
+  )
+@end lisp
+
+@node Usage
+@chapter Usage
+
+@itemize
+@item
+@end itemize
+
+@menu
+* Commands::
+@end menu
+
+@node Commands
+@section Commands
+
+@itemize
+@item
+@strong{Placeholder}
+@itemize
+@item
+@samp{placeholder}
+@end itemize
+@end itemize
+
+@node Changelog
+@chapter Changelog
+
+@emph{Note:} Breaking changes may be made before version 1.0, but in the event of major changes, attempts at backward compatibility will be made with obsolescence declarations, translation of arguments, etc.  Users who need stability guarantees before 1.0 may choose to use tagged stable releases.
+
+@menu
+* 0.0.1-alpha: 001-alpha. 
+@end menu
+
+@node 001-alpha
+@section 0.0.1-alpha
+
+Initial release
+
+@node Notes
+@chapter Notes
+
+@menu
+* Known issues::
+* Credits::
+@end menu
+
+@node Known issues
+@section Known issues
+
+@node Credits
+@section Credits
+
+@itemize
+@item
+Placeholder
+@end itemize
+
+@node License
+@chapter License
+
+GPLv3
+
+@bye
