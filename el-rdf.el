@@ -26,8 +26,11 @@
 ;;; Commentary:
 ;;
 ;; Placeholder
+;; Package-Requires: ((dash "20250312.1307"))
 
 ;;; Code:
+(require 'dash)
+(require 'cl-seq)
 
   (defun update-dual (key val orig)
     ;; orig is ((a (foo:bar baz:guuq))(frob:nix ("1")))
@@ -60,11 +63,6 @@
         (puthash newpred `((,newobj . ,(list newsub))) pos))
       ;; maybe refactor into cond
       ))
-
-  (defun variable? (x)
-    "Check if x is a variable (starts with $)."
-    (and (symbolp x)
-         (string-prefix-p "$" (symbol-name x))))
 
   (defun var-or-wild? (x)
     (or (eq x t) (variable? x)))
@@ -106,12 +104,6 @@
        table)
       results))
 
-
-;; unused
-  (defun test-expand ()
-    (ht-map (lambda (key value)
-  	    (expand-duals value key))
-  	  (cdr (assoc 'spo graph-index))))
 
   (defun triples (pattern graph) ;; doesn't do pattern matching just retrieves the right index
     (let ((s (nth 0 pattern))
