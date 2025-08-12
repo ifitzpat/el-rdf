@@ -282,7 +282,7 @@
 
 (defun select (binding-list where)
   (mapcan (lambda (r)
-	    (if (> 1 (length r))
+	    (if (symbolp (car r)) ; not a nested list
 		(list r)
 		r))
           (mapcar (lambda (r) (bindings-from-row binding-list r)) where)))
