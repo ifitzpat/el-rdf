@@ -4,7 +4,7 @@
 
 ;; Author: Ian FitzPatrick ian@ianfitzpatrick.eu
 ;; URL: codeberg.org/ifitzpat/el-rdf
-;; Version: 0.0.1-alpha
+;; Version: 0.0.2
 ;; Package-Requires: ((emacs "27.1")(request))
 ;; Keywords: rdf triple-store
 
@@ -271,6 +271,16 @@
 
 
   	  )))
+
+(defun binding-val (b res)
+  (cdr (assoc b res)))
+
+(defun bindings-from-row (bs row)
+  (mapcar (lambda (b) (binding-val b (car row))) bs))
+
+(defun select (binding-list where)
+  (mapcar (lambda (r) (bindings-from-row binding-list r)) where))
+
 
       ;; I want to return a list of triples
         (defun terse-to-triples (terse)
