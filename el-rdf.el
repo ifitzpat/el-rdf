@@ -297,6 +297,9 @@
       	  (predobj (maybe-relist-obj (cdr terse) )))
             (expand-duals predobj subject)))
 
+(defun construct (clauses where)
+  (mapcan (lambda (r) (cl-sublis (car r) clauses)) where))
+
 (defun maybe-relist-obj (predobj)
   ;; FIXME
   (mapcar
