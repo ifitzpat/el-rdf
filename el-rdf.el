@@ -5,7 +5,7 @@
 ;; Author: Ian FitzPatrick ian@ianfitzpatrick.eu
 ;; URL: codeberg.org/ifitzpat/el-rdf
 ;; Version: 0.0.3
-;; Package-Requires: ((emacs "27.1")(request))
+;; Package-Requires: ((emacs "27.1")(request)(dash "20250312.1307"))
 ;; Keywords: rdf triple-store
 
 ;; This file is not part of GNU Emacs
@@ -26,7 +26,6 @@
 ;;; Commentary:
 ;;
 ;; Placeholder
-;; Package-Requires: ((dash "20250312.1307"))
 
 ;;; Code:
 (require 'dash)
