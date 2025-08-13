@@ -272,6 +272,8 @@
 
   	  )))
 
+(defalias 'where 'graph-query)
+
 (defun binding-val (b res)
   (cdr (assoc b res)))
 
