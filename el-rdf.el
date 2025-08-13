@@ -404,4 +404,4 @@ predobj)
  filename)
 
 (provide 'el-rdf)
-;;; el-rdf ends here
+;;; el-rdf.el ends here
