@@ -4,7 +4,7 @@
 
 ;; Author: Ian FitzPatrick ian@ianfitzpatrick.eu
 ;; URL: codeberg.org/ifitzpat/el-rdf
-;; Version: 0.0.3
+;; Version: 0.0.4
 ;; Package-Requires: ((emacs "27.1")(request)(dash "20250312.1307"))
 ;; Keywords: rdf triple-store
 
@@ -30,6 +30,11 @@
 ;;; Code:
 (require 'dash)
 (require 'cl-seq)
+
+(defun make-graph ()
+`((spo . ,(make-hash-table :test 'eq))
+  	(osp . ,(make-hash-table :test 'eq))
+  	(pos . ,(make-hash-table :test 'eq))))
 
   (defun update-dual (key val orig)
     ;; orig is ((a (foo:bar baz:guuq))(frob:nix ("1")))
@@ -272,6 +277,10 @@
   	  )))
 
 ;; TODO where could be a function that wraps around graph-query
+;; maybe it returns a lambda that can be applied to graph
+;; and maybe it takes an optional FILTER function that is applied to the result of the graph-query
+;; the construct, select, ask functions should then apply the where function to the graph
+
 (defalias 'where 'graph-query)
 
 (defun binding-val (b res)
@@ -297,6 +306,7 @@
       	  (predobj (maybe-relist-obj (cdr terse) )))
             (expand-duals predobj subject)))
 
+;; TODO check whether this deals with multiple bindings correctly
 (defun construct (clauses where)
   (mapcan (lambda (r) (cl-sublis (car r) clauses)) where))
 
