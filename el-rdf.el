@@ -4,7 +4,7 @@
 
 ;; Author: Ian FitzPatrick ian@ianfitzpatrick.eu
 ;; URL: codeberg.org/ifitzpat/el-rdf
-;; Version: 0.0.2
+;; Version: 0.0.3
 ;; Package-Requires: ((emacs "27.1")(request))
 ;; Keywords: rdf triple-store
 
@@ -272,6 +272,7 @@
 
   	  )))
 
+;; TODO where could be a function that wraps around graph-query
 (defalias 'where 'graph-query)
 
 (defun binding-val (b res)
@@ -282,6 +283,7 @@
   (mapcar (lambda (r) (mapcar (lambda (b) (binding-val b r)) bs)) row))
 
 
+;; TODO refactor this so that where is a function
 (defun select (binding-list where)
   (mapcan (lambda (r)
 	    (if (symbolp (car r)) ; not a nested list
