@@ -4,7 +4,7 @@
 
 ;; Author: Ian FitzPatrick ian@ianfitzpatrick.eu
 ;; URL: codeberg.org/ifitzpat/el-rdf
-;; Version: 0.0.5
+;; Version: 0.0.6
 ;; Package-Requires: ((emacs "27.1")(request)(dash "20250312.1307"))
 ;; Keywords: rdf triple-store
 
@@ -326,6 +326,28 @@
 predobj)
 
   )
+
+(defun eval-with-bindings (thelist thefun)
+  "Bind keys in THELIST to their values and execute THEFUN."
+  (let ((bindings (mapcar (lambda (pair)
+			    (let ((mycar (car pair))
+				  (mycdr (cdr pair)))
+			      (when (and (symbolp mycdr) (not (boundp mycdr)) )
+				(setq mycdr nil))
+                               `(,mycar ,mycdr)))
+                           thelist)))
+    (eval
+     `(let ,bindings
+             (funcall ,thefun)))))
+
+(defun filter (predicate bindinglist)
+  ;; for each list of bindings in bindinglist
+  ;; bind all the variables then execute the predicate
+  (remove t (-filter (lambda (b)
+	    (eval-with-bindings (car b) predicate) ;; FIXME deal with multiple bindings
+	     ) bindinglist) ))
+
+
 (defun render-triple (triple)
   (if (symbolp (nth 2 triple))
       (concat (format "\"%s\" -> \"%s\" [label=\"%s\"];\n" (nth 0 triple) (nth 2 triple) (nth 1 triple)))
