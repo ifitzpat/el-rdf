@@ -293,7 +293,7 @@
 (defun ask (where graph)
   (condition-case nil
       (>= (length (graph-query where graph) ) 1)
-     (error nil))
+     (error nil)))
 
 ;; TODO refactor this so that where is a function
 (defun select (binding-list where)
