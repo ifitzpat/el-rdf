@@ -27,5 +27,19 @@
 	 (member 'bob x)))
       result))))
 
+(ert-deftest test-select-multiple-bindings-query ()
+  "Test the select function with mutual friendship query"
+  (let* ((test-graph (make-graph))
+	 (side-effect-only (add-triples '((alice a foaf:Person)
+		   (alice friend bob)
+		   (alice friend charlie)
+		   (alice address "10 Downing Street")) test-graph))
+	 (result (select '($b) (graph-query '(($a a foaf:Person)($a friend $b)($a address $add)) test-graph))))
+    (should
+	(and
+	 (member (list 'charlie) result)
+	 (member (list 'bob) result))
+      )))
+
 (provide 'test-el-rdf)
 ;;; test-el-rdf.el ends here
