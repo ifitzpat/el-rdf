@@ -320,9 +320,12 @@
       	  (predobj (maybe-relist-obj (cdr terse) )))
             (expand-duals predobj subject)))
 
-;; TODO check whether this deals with multiple bindings correctly
 (defun construct (clauses where)
-  (mapcan (lambda (r) (cl-sublis (car r) clauses)) where))
+  (mapcan (lambda (l)
+	    (mapcan (lambda (r)
+		      (cl-sublis r clauses)
+		      ) l)
+	    ) where))
 
 (defun maybe-relist-obj (predobj)
   ;; FIXME

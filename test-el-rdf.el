@@ -57,5 +57,20 @@
 	 (member (list 'bob) result))
       )))
 
+(ert-deftest test-construct ()
+  "Test the construct function with multiple bindings"
+  (let* ((test-graph (make-graph))
+	 (side-effect-only (add-triples '((alice a foaf:Person)
+		   (alice friend bob)
+		   (alice friend charlie)
+		   (alice address "10 Downing Street")) test-graph))
+	 (query-result (graph-query '(($a a foaf:Person)($a friend $b)($a address $add)) test-graph))
+	 (result (construct '(($a knows $b)) query-result)))
+    (should
+	(and
+	 (member '(alice knows bob) result)
+	 (member '(alice knows charlie) result)
+	 (= 2 (length result))))))
+
 (provide 'test-el-rdf)
 ;;; test-el-rdf.el ends here
