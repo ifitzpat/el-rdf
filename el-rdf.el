@@ -31,6 +31,9 @@
 (require 'dash)
 (require 'cl-seq)
 
+(defvar el-rdf-debug nil
+  "When non-nil, enable debug output for el-rdf operations.")
+
 (defun make-graph ()
 `((spo . ,(make-hash-table :test 'eq))
   	(osp . ,(make-hash-table :test 'eq))
@@ -130,10 +133,11 @@
        )))
 
   (defun printgindex (index)
-    (maphash (lambda (key value)
-  	     (princ (format "key: %s, value: %s" key value) )
-  	     (princ "\n")
-  	     ) index))
+    (when el-rdf-debug
+      (maphash (lambda (key value)
+  	       (princ (format "key: %s, value: %s" key value) )
+  	       (princ "\n")
+  	       ) index)))
 
   (defun variable? (x)
     "Check if x is a variable (starts with $)."
@@ -188,16 +192,18 @@
   		bindings))
 
   (defun compatible-bindings? (newbindings oldbindings)
-    (princ (format "comparing %s with %s\n" newbindings oldbindings))
+    (when el-rdf-debug
+      (princ (format "comparing %s with %s\n" newbindings oldbindings)))
     (-every
      'identity
      (mapcar (lambda (x)
-  	     (let ((oldval (cdr (assoc (car x) (car oldbindings))))
+  	     (let ((oldval (cdr (assoc (car x) (car oldbindings)))) ; FIXME deal with multiple bindings
   		   (newval (cdr (assoc (car x) (list x))))
   		   )
 
-  (princ
-  	      (format "comparing %s with %s\n" newval oldval))
+  (when el-rdf-debug
+    (princ
+  	      (format "comparing %s with %s\n" newval oldval)))
   	     (or (not oldval)(eq oldval newval))
 
   	       )
@@ -210,11 +216,12 @@
     (cond ((not newbindings) (clean-bindings oldbindings))
     (t
         (progn
-  	;(princ (format "try to add %s to %s \n" newbindings oldbindings))
+  	;(when el-rdf-debug (princ (format "try to add %s to %s \n" newbindings oldbindings)))
   	(mapcan  (lambda (x)
   		   (if (not (compatible-bindings? x oldbindings))
   		       (progn
-  			 (princ (format "Conflicing bindings %s and %s\n" x oldbindings))
+  			 (when el-rdf-debug
+  			   (princ (format "Conflicing bindings %s and %s\n" x oldbindings)))
   			 nil)
   		       (clean-bindings (list (-uniq (append x (car oldbindings))))) )) newbindings))))
     )
@@ -223,13 +230,15 @@
     (let*  ((bindings (or bindings '()))
   					;(bindings (mapcar (lambda (y) (-remove (lambda (x) (eq t (car x))) y)) bindings))
   	  (pattern (car clauses)))
-      (princ (format "new call; bidings are now %s with length %s \n" bindings (length bindings)))
+      (when el-rdf-debug
+        (princ (format "new call; bidings are now %s with length %s \n" bindings (length bindings))))
 
       (cond ((or (not clauses) (< (length pattern) 3)) ; we're at the end of the list of clauses
   	   bindings)
   	  ((not bindings) ; this is the first invocation
   	   (let ((bindings (traverse-graph pattern (triples pattern graph))))
-  	     (princ "first call\n")
+  	     (when el-rdf-debug
+  	       (princ "first call\n"))
   	     (if (not bindings)
   		 (error (format "The graph pattern %s doesn't match" pattern))
   	       (graph-query (cdr clauses) graph (update-bindings nil bindings)))))
@@ -243,11 +252,12 @@
   		   (updated-bindings (update-bindings newbindings (list binding-branch)))
   					;(newbindings (mapcar (lambda (y) (-remove (lambda (x) (eq t (car x))) y)) newbindings))
   		   )
-                  (princ (format "current clause %s \n" pattern))
-                  (princ (format "with bindings %s \n" (cl-sublis binding-branch pattern)))
-                  (princ (format "yielded bindings %s \n" newbindings))
-  		(princ (format "rest of the claues %s \n" (cl-sublis binding-branch (cdr clauses))))
-  		(princ (format "maybe add found bindings to current bindings %s \n"  (update-bindings newbindings (list binding-branch ))))
+                  (when el-rdf-debug
+                    (princ (format "current clause %s \n" pattern))
+                    (princ (format "with bindings %s \n" (cl-sublis binding-branch pattern)))
+                    (princ (format "yielded bindings %s \n" newbindings))
+  		    (princ (format "rest of the claues %s \n" (cl-sublis binding-branch (cdr clauses))))
+  		    (princ (format "maybe add found bindings to current bindings %s \n"  (update-bindings newbindings (list binding-branch )))))
   		(if (or (not newbindings)(not updated-bindings))
   		    nil
   		  (graph-query
