@@ -28,7 +28,7 @@
       result))))
 
 (ert-deftest test-select-multiple-bindings-query ()
-  "Test the select function with mutual friendship query"
+  "Test the select function with multiple bindings of $b"
   (let* ((test-graph (make-graph))
 	 (side-effect-only (add-triples '((alice a foaf:Person)
 		   (alice friend bob)
@@ -38,6 +38,22 @@
     (should
 	(and
 	 (member (list 'charlie) result)
+	 (member (list 'bob) result))
+      )))
+
+(ert-deftest test-filter ()
+  "Test the filter function with multiple bindings of $b"
+  (let* ((test-graph (make-graph))
+	 (side-effect-only (add-triples '((alice a foaf:Person)
+		   (alice friend bob)
+		   (alice friend charlie)
+		   (alice address "10 Downing Street")) test-graph))
+	 (query-result (graph-query '(($a a foaf:Person)($a friend $b)($a address $add)) test-graph))
+	 (filtered-result (filter (lambda () (eq $b 'bob)) query-result))
+	 (result (select '($b) filtered-result)))
+    (should
+	(and
+	 (not (member (list 'charlie) result) )
 	 (member (list 'bob) result))
       )))
 

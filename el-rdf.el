@@ -343,7 +343,7 @@ predobj)
 			    (let ((mycar (car pair))
 				  (mycdr (cdr pair)))
 			      (when (and (symbolp mycdr) (not (boundp mycdr)) )
-				(setq mycdr nil))
+				(setq mycdr `',mycdr))
                                `(,mycar ,mycdr)))
                            thelist)))
     (eval
@@ -353,9 +353,9 @@ predobj)
 (defun filter (predicate bindinglist)
   ;; for each list of bindings in bindinglist
   ;; bind all the variables then execute the predicate
-  (remove t (-filter (lambda (l)
-	    (mapcan (lambda (b) (eval-with-bindings b predicate)) l) ;; FIXME check if this deals with multiple bindings
-	     ) bindinglist) ))
+  (-filter (lambda (l)
+	    (-any (lambda (b) (eval-with-bindings b predicate)) l)) ;; check if any binding in the list satisfies predicate
+	   bindinglist))
 
 
 (defun render-triple (triple)
