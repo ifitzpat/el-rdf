@@ -353,8 +353,8 @@ predobj)
 (defun filter (predicate bindinglist)
   ;; for each list of bindings in bindinglist
   ;; bind all the variables then execute the predicate
-  (remove t (-filter (lambda (b)
-	    (eval-with-bindings (car b) predicate) ;; FIXME deal with multiple bindings
+  (remove t (-filter (lambda (l)
+	    (mapcan (lambda (b) (eval-with-bindings b predicate)) l) ;; FIXME check if this deals with multiple bindings
 	     ) bindinglist) ))
 
 
