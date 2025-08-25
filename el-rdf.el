@@ -327,6 +327,7 @@
 		      ) l)
 	    ) where))
 
+;; NOTE this is possible resource intensive for large graphs
 (defun graph-union (&rest args)
   (let ((tempgraph (make-graph)))
     (mapc (lambda (g)
