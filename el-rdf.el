@@ -4,7 +4,7 @@
 
 ;; Author: Ian FitzPatrick ian@ianfitzpatrick.eu
 ;; URL: codeberg.org/ifitzpat/el-rdf
-;; Version: 0.0.8
+;; Version: 0.0.9
 ;; Package-Requires: ((emacs "27.1")(request)(dash "20250312.1307"))
 ;; Keywords: rdf triple-store
 
@@ -326,6 +326,13 @@
 		      (cl-sublis r clauses)
 		      ) l)
 	    ) where))
+
+(defun graph-union (&rest args)
+  (let ((tempgraph (make-graph)))
+    (mapc (lambda (g)
+		(add-triples (construct '(($s $p $o)) (graph-query '(($s $p $o)) g) g) tempgraph)
+		) args)
+    tempgraph))
 
 (defun maybe-relist-obj (predobj)
   ;; FIXME
