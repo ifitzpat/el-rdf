@@ -4,7 +4,7 @@
 
 ;; Author: Ian FitzPatrick ian@ianfitzpatrick.eu
 ;; URL: codeberg.org/ifitzpat/el-rdf
-;; Version: 0.0.10
+;; Version: 0.0.11
 ;; Package-Requires: ((emacs "27.1")(request)(dash "20250312.1307"))
 ;; Keywords: rdf triple-store
 
@@ -242,7 +242,11 @@
   	       (princ "first call\n"))
   	     (if (not bindings)
   		 (error (format "The graph pattern %s doesn't match" pattern))
-  	       (graph-query (cdr clauses) graph (update-bindings nil bindings)))))
+  	       (if (cdr clauses)
+  		   ;; More clauses to process
+  		   (graph-query (cdr clauses) graph (update-bindings nil bindings))
+  		 ;; Single clause - wrap each binding in a list for consistency
+  		 (mapcar #'list bindings)))))
   	  ((> (length bindings) 1)
   	   (mapcar
   	    (lambda (binding-branch)
