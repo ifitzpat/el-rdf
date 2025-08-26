@@ -4,7 +4,7 @@
 
 ;; Author: Ian FitzPatrick ian@ianfitzpatrick.eu
 ;; URL: codeberg.org/ifitzpat/el-rdf
-;; Version: 0.0.11
+;; Version: 0.0.12
 ;; Package-Requires: ((emacs "27.1")(request)(dash "20250312.1307"))
 ;; Keywords: rdf triple-store
 
@@ -307,7 +307,7 @@
 
 (defun ask (where graph)
   (condition-case nil
-      (>= (length (graph-query where graph) ) 1)
+      (>= (length (remove nil (graph-query where graph) ) ) 1)
      (error nil)))
 
 ;; TODO refactor this so that where is a function
