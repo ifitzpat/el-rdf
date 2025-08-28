@@ -116,22 +116,63 @@
     (let ((s (nth 0 pattern))
   	(p (nth 1 pattern))
   	(o (nth 2 pattern)))
+      ; (princ (format "DEBUG triples: pattern=%s, s=%s p=%s o=%s\n" pattern s p o))
       (cond
        ((not (var-or-wild? s))
+        ; (princ (format "DEBUG triples: using SPO index for subject %s\n" s))
         (expand-duals (gethash s (cdr (assoc 'spo graph))) s)
         )
        ((not (var-or-wild? p))
+        (when (eq p 'conf:websiteUrl)
+          (princ (format "DEBUG triples: SPECIFIC CHECK for predicate %s\n" p))
+          (princ (format "DEBUG triples: POS hash contains: %s\n" (gethash p (cdr (assoc 'pos graph))))))
         (expand-duals (gethash p (cdr (assoc 'pos graph))) p 'pos)
         )
        ((not (var-or-wild? o))
-        (expand-duals (gethash o (cdr (assoc 'osp graph))) o 'osp) ;; TODO reorder
+        ; (princ (format "DEBUG triples: using OSP index for object %s\n" o))
+        (expand-duals (gethash o (cdr (assoc 'osp graph))) o 'osp)
         )
        (t
+        ; (princ "DEBUG triples: using universal pattern - all triples\n")
         (apply #'append
                (ht-map (lambda (key value)
                         (expand-duals value key))
                       (cdr (assoc 'spo graph)))))
        )))
+
+(defun triples-to-string (trips)
+  "Convert a list of TRIPS to string while preserving nil values and empty strings."
+  (concat
+   "("
+   (mapconcat
+    (lambda (trip)
+      (concat "("
+              (mapconcat
+               (lambda (element)
+                 (cond
+                  ((and (stringp element) (string= "" element)) "\"\"")
+                  ((stringp element) (format "\"%s\"" element))
+                  ((null element) "nil")
+                  (t (format "%s" element))))
+               trip
+               " ")
+              ")"))
+    trips
+    "\n ")
+   ")"))
+
+(defun save-graph (graph filename)
+  (let
+      ((full-graph (triples '(t t t) graph)))
+    (with-current-buffer
+	(get-buffer-create (find-file-noselect filename))
+        (erase-buffer)
+        (insert (triples-to-string full-graph))
+	(save-buffer))))
+
+(defun load-graph (graph filename)
+  (add-triples (with-current-buffer (get-buffer-create (find-file-noselect filename))
+        (read (buffer-string))) graph))
 
   (defun printgindex (index)
     (when el-rdf-debug
@@ -233,6 +274,7 @@
   	  (pattern (car clauses)))
       (when el-rdf-debug
         (princ (format "new call; bidings are now %s with length %s \n" bindings (length bindings))))
+      ; (princ (format "DEBUG graph-query: clauses=%s, pattern=%s, bindings=%s\n" clauses pattern bindings))
 
       (cond ((or (not clauses) (< (length pattern) 3)) ; we're at the end of the list of clauses
   	   bindings)
@@ -336,7 +378,7 @@
 (defun graph-union (&rest args)
   (let ((tempgraph (make-graph)))
     (mapc (lambda (g)
-		(add-triples (construct '(($s $p $o)) (graph-query '(($s $p $o)) g) g) tempgraph)
+		(add-triples (triples '($s $p $o) g) tempgraph)
 		) args)
     tempgraph))
 
