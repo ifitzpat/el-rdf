@@ -147,8 +147,7 @@
               (mapconcat
                (lambda (element)
                  (cond
-                  ((and (stringp element) (string= "" element)) "\"\"")
-                  ((stringp element) (format "\"%s\"" element))
+                  ((stringp element) (format "%S" element))
                   ((null element) "nil")
                   (t (format "%s" element))))
                trip
@@ -400,7 +399,7 @@ predobj)
 			      (when (and (symbolp mycdr) (not (boundp mycdr)) )
 				(setq mycdr `',mycdr))
                                `(,mycar ,mycdr)))
-                           thelist)))
+                           (cl-remove-if (lambda (pair) (eq (car pair) t)) thelist))))
     (eval
      `(let ,bindings
              (funcall ,thefun)))))
