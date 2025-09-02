@@ -366,9 +366,23 @@
 (defun construct (clauses where)
   (mapcan (lambda (l)
 	    (mapcan (lambda (r)
-		      (cl-sublis r clauses)
+		      (expand-list-bindings (cl-sublis r clauses))
 		      ) l)
 	    ) where))
+
+(defun expand-list-bindings (triples)
+  "Expand triples containing list values into multiple triples"
+  (mapcan (lambda (triple)
+            (let ((subject (nth 0 triple))
+                  (predicate (nth 1 triple))
+                  (object (nth 2 triple)))
+              ;; Check if object is a list
+              (if (listp object)
+                  ;; Expand list into multiple triples
+                  (mapcar (lambda (obj) (list subject predicate obj)) object)
+                ;; Single triple
+                (list triple))))
+          triples))
 
 ;; NOTE this is possible resource intensive for large graphs
 (defun graph-union (&rest args)
