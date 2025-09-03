@@ -4,7 +4,7 @@
 
 ;; Author: Ian FitzPatrick ian@ianfitzpatrick.eu
 ;; URL: codeberg.org/ifitzpat/el-rdf
-;; Version: 0.0.15
+;; Version: 0.0.16
 ;; Package-Requires: ((emacs "27.1")(request)(dash "20250312.1307"))
 ;; Keywords: rdf triple-store
 
@@ -182,13 +182,19 @@
     (and (symbolp x)
          (string-prefix-p "$" (symbol-name x))))
 
+
+(defun augmented-eq (pattern input)
+  (cond ((symbolp pattern) (eq pattern input))
+	((stringp pattern) (string= pattern input))
+	((numberp pattern) (eql pattern input))))
+
   (defun pat-match (pattern input)
     ;; Note: if done on triples retrieved from an index one third of the comparisons might be redundant
     (when (not pattern)
       nil)
     (if (variable? pattern) (list (cons pattern input))
       (if (and (atom pattern)(atom input))
-          (if (eq pattern input)
+          (if (augmented-eq pattern input)
   	    (list (cons t input))
   	  (list (cons nil nil)))
         (append (pat-match (car pattern)(car input))
