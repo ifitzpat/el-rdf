@@ -282,6 +282,68 @@
     )
 
   (defun graph-query (clauses graph &optional bindings)
+    "Execute a SPARQL-like query against a graph, supporting OPTIONAL clauses.
+    
+CLAUSES is a list of triple patterns, e.g., '(($s rdf:type foaf:Person) ($s foaf:name $name))
+GRAPH is the RDF graph created with make-graph
+BINDINGS is the current variable bindings (used for recursive calls)
+
+OPTIONAL SYNTAX:
+  Use (optional PATTERN) to mark optional clauses, e.g.,
+  '(($s rdf:type foaf:Person) (optional ($s foaf:name $name)))
+
+BINDING STRUCTURE:
+  The function maintains a triple-nested binding structure throughout execution:
+  - Level 1: List of binding sets (one per solution)
+  - Level 2: List of binding branches within each solution  
+  - Level 3: Individual variable bindings as (var . value) pairs
+
+EXAMPLES OF DATA FLOW:
+
+1. FIRST CALL (no bindings):
+   Input:   clauses='(($s rdf:type foaf:Person) ($s foaf:name $name))
+            bindings=nil
+   
+   After first pattern match:
+   bindings='((($s . alice)) (($s . bob)))
+   
+   Wrapped for consistency:
+   bindings='(((($s . alice))) ((($s . bob))))
+
+2. MULTIPLE BINDINGS (length > 1):
+   Input:   clauses='(($s foaf:name $name))
+            bindings='(((($s . alice))) ((($s . bob))))
+   
+   For each binding branch:
+   - alice: pattern becomes '(alice foaf:name $name)
+   - bob: pattern becomes '(bob foaf:name $name)
+   
+   Results might be:
+   - alice: newbindings='((($name . \"Alice Smith\")))
+   - bob: newbindings='() (no name found)
+   
+   Final result:
+   '(((($s . alice) ($name . \"Alice Smith\"))))
+
+3. SINGLE BINDING BRANCH:
+   Input:   clauses='(($s foaf:email $email))
+            bindings='((($s . alice) ($name . \"Alice Smith\")))
+   
+   Substituted pattern: '(alice foaf:email $email)
+   If match found: newbindings='((($email . \"alice@example.com\")))
+   Final: '((($s . alice) ($name . \"Alice Smith\") ($email . \"alice@example.com\")))
+
+4. OPTIONAL CLAUSES:
+   When is-optional=t and a clause fails to match:
+   - Instead of returning nil (which would fail the entire query)
+   - Continue with existing bindings to next clause
+   - This implements SPARQL OPTIONAL left-join semantics
+
+EXECUTION PATHS:
+  1. Base case: No more clauses or malformed pattern -> return current bindings
+  2. First call: No existing bindings -> match first pattern, recurse with results
+  3. Multiple branches: Split execution per binding branch, combine results
+  4. Single branch: Apply pattern to current bindings, recurse with updated bindings"
     (let*  ((bindings (or bindings '()))
   					;(bindings (mapcar (lambda (y) (-remove (lambda (x) (eq t (car x))) y)) bindings))
   	  (pattern (car clauses))
@@ -304,7 +366,8 @@
   		   (graph-query (cdr clauses) graph (update-bindings nil (or bindings '())))
   		 ;; Single clause - wrap each binding in a list for consistency
   		 (if bindings (mapcar #'list bindings) '())))))
-  	  ((> (length bindings) 1)
+  	  ;; MULTIPLE BINDING BRANCHES: Split execution per branch, combine results
+	  ((> (length bindings) 1)
   	   (mapcar
   	    (lambda (binding-branch)
   	      (let*
@@ -335,7 +398,8 @@
   	    bindings)
 
   	   )
-  	  (t
+  	  ;; SINGLE BINDING BRANCH: Apply pattern to current bindings
+	  (t
   	   (let* ((newbindings
   		   (traverse-graph (cl-sublis bindings unwrapped-pattern)
   				   (triples unwrapped-pattern graph)))
