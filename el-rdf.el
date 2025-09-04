@@ -4,7 +4,7 @@
 
 ;; Author: Ian FitzPatrick ian@ianfitzpatrick.eu
 ;; URL: codeberg.org/ifitzpat/el-rdf
-;; Version: 0.0.16
+;; Version: 0.0.17
 ;; Package-Requires: ((emacs "27.1")(request)(dash "20250312.1307"))
 ;; Keywords: rdf triple-store
 
@@ -184,7 +184,7 @@
 
   (defun optional-clause? (clause)
     "Check if clause is wrapped with optional."
-    (and (listp clause) 
+    (and (listp clause)
          (eq (car clause) 'optional)))
 
   (defun unwrap-optional (clause)
