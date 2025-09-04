@@ -72,5 +72,43 @@
 	 (member '(alice knows charlie) result)
 	 (= 2 (length result))))))
 
+(ert-deftest test-optional-basic ()
+  "Test basic OPTIONAL functionality with some entities having optional properties"
+  (let* ((test-graph (make-graph))
+	 (side-effect-only (add-triples '((person1 rdf:type schema:Person)
+          (person1 rdfs:label "John")
+          (person2 rdf:type schema:Person)
+          (person3 rdf:type schema:Person)
+          (person3 rdfs:label "Alice")) test-graph))
+	 (result (graph-query '(($p rdf:type schema:Person)
+                               (optional ($p rdfs:label $name))) test-graph)))
+    (should (= 3 (length result)))))
+
+(ert-deftest test-optional-no-match ()
+  "Test OPTIONAL with clause that never matches"
+  (let* ((test-graph (make-graph))
+	 (side-effect-only (add-triples '((person1 rdf:type schema:Person)
+          (person2 rdf:type schema:Person)) test-graph))
+	 (result (graph-query '(($p rdf:type schema:Person)
+                               (optional ($p nonexistent:property $value))) test-graph)))
+    (should (= 2 (length result)))))
+
+(ert-deftest test-optional-with-select ()
+  "Test OPTIONAL functionality works with SELECT"
+  (let* ((test-graph (make-graph))
+	 (side-effect-only (add-triples '((person1 rdf:type schema:Person)
+          (person1 rdfs:label "John")
+          (person2 rdf:type schema:Person)
+          (person3 rdf:type schema:Person)
+          (person3 rdfs:label "Alice")) test-graph))
+	 (query-result (graph-query '(($p rdf:type schema:Person)
+                                     (optional ($p rdfs:label $name))) test-graph))
+	 (result (select '($p $name) query-result)))
+    (should (= 3 (length result)))
+    ;; Verify we get results for all persons, with nil for missing labels
+    (should (-any (lambda (row) (and (eq (car row) 'person1) (string= (cadr row) "John"))) result))
+    (should (-any (lambda (row) (and (eq (car row) 'person2) (eq (cadr row) nil))) result))
+    (should (-any (lambda (row) (and (eq (car row) 'person3) (string= (cadr row) "Alice"))) result))))
+
 (provide 'test-el-rdf)
 ;;; test-el-rdf.el ends here

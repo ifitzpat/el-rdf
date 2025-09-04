@@ -182,6 +182,17 @@
     (and (symbolp x)
          (string-prefix-p "$" (symbol-name x))))
 
+  (defun optional-clause? (clause)
+    "Check if clause is wrapped with optional."
+    (and (listp clause) 
+         (eq (car clause) 'optional)))
+
+  (defun unwrap-optional (clause)
+    "Extract the pattern from an optional clause."
+    (if (optional-clause? clause)
+        (cadr clause)
+      clause))
+
 
 (defun augmented-eq (pattern input)
   (cond ((symbolp pattern) (eq pattern input))
@@ -273,42 +284,47 @@
   (defun graph-query (clauses graph &optional bindings)
     (let*  ((bindings (or bindings '()))
   					;(bindings (mapcar (lambda (y) (-remove (lambda (x) (eq t (car x))) y)) bindings))
-  	  (pattern (car clauses)))
+  	  (pattern (car clauses))
+  	  (is-optional (optional-clause? pattern))
+  	  (unwrapped-pattern (if is-optional (unwrap-optional pattern) pattern)))
       (when el-rdf-debug
         (princ (format "new call; bidings are now %s with length %s \n" bindings (length bindings))))
       ; (princ (format "DEBUG graph-query: clauses=%s, pattern=%s, bindings=%s\n" clauses pattern bindings))
 
-      (cond ((or (not clauses) (< (length pattern) 3)) ; we're at the end of the list of clauses
+      (cond ((or (not clauses) (< (length unwrapped-pattern) 3)) ; we're at the end of the list of clauses
   	   bindings)
   	  ((not bindings) ; this is the first invocation
-  	   (let ((bindings (traverse-graph pattern (triples pattern graph))))
+  	   (let ((bindings (traverse-graph unwrapped-pattern (triples unwrapped-pattern graph))))
   	     (when el-rdf-debug
   	       (princ "first call\n"))
-  	     (if (not bindings)
-  		 (error (format "The graph pattern %s doesn't match" pattern))
+  	     (if (and (not bindings) (not is-optional))
+  		 (error (format "The graph pattern %s doesn't match" unwrapped-pattern))
   	       (if (cdr clauses)
   		   ;; More clauses to process
-  		   (graph-query (cdr clauses) graph (update-bindings nil bindings))
+  		   (graph-query (cdr clauses) graph (update-bindings nil (or bindings '())))
   		 ;; Single clause - wrap each binding in a list for consistency
-  		 (mapcar #'list bindings)))))
+  		 (if bindings (mapcar #'list bindings) '())))))
   	  ((> (length bindings) 1)
   	   (mapcar
   	    (lambda (binding-branch)
   	      (let*
   		  ((newbindings (traverse-graph
-  				 (cl-sublis binding-branch pattern)
-  				 (triples pattern graph)))
+  				 (cl-sublis binding-branch unwrapped-pattern)
+  				 (triples unwrapped-pattern graph)))
   		   (updated-bindings (update-bindings newbindings (list binding-branch)))
   					;(newbindings (mapcar (lambda (y) (-remove (lambda (x) (eq t (car x))) y)) newbindings))
   		   )
                   (when el-rdf-debug
-                    (princ (format "current clause %s \n" pattern))
-                    (princ (format "with bindings %s \n" (cl-sublis binding-branch pattern)))
+                    (princ (format "current clause %s \n" unwrapped-pattern))
+                    (princ (format "with bindings %s \n" (cl-sublis binding-branch unwrapped-pattern)))
                     (princ (format "yielded bindings %s \n" newbindings))
   		    (princ (format "rest of the claues %s \n" (cl-sublis binding-branch (cdr clauses))))
   		    (princ (format "maybe add found bindings to current bindings %s \n"  (update-bindings newbindings (list binding-branch )))))
   		(if (or (not newbindings)(not updated-bindings))
-  		    nil
+  		    (if is-optional
+			;; For optional clauses that fail, continue with existing bindings
+			(graph-query (cdr clauses) graph (list binding-branch))
+		      nil)
   		  (graph-query
   		   (cl-sublis updated-bindings (cdr clauses))
   		   graph
@@ -321,11 +337,14 @@
   	   )
   	  (t
   	   (let* ((newbindings
-  		   (traverse-graph (cl-sublis bindings pattern)
-  				   (triples pattern graph)))
+  		   (traverse-graph (cl-sublis bindings unwrapped-pattern)
+  				   (triples unwrapped-pattern graph)))
    		  (updated-bindings (update-bindings newbindings bindings)))
   	     (if (or (not newbindings)(not updated-bindings) )
-  		 nil 	   ; if nil then return nil
+  		 (if is-optional
+		     ;; For optional clauses that fail, continue with existing bindings
+		     (graph-query (cdr clauses) graph bindings)
+		   nil) 	   ; if nil then return nil
   	       (graph-query (cl-sublis updated-bindings (cdr clauses)) graph updated-bindings))
   	     ) ;take the next clause
   					; get bindings associated with it
