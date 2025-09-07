@@ -208,5 +208,74 @@
     (should (= 1 (length (graph-query '(($s $p $o)) test-graph))))
     (should (= 1 (length (graph-query '((person1 rdfs:label $name)) test-graph))))))
 
+(ert-deftest test-delete-data-basic ()
+  "Test basic delete-data functionality with pattern matching"
+  (let ((test-graph (make-graph)))
+    ;; Add test data
+    (add-triples '((person1 rdf:type foaf:Person)
+                   (person1 foaf:age 30)
+                   (person2 rdf:type foaf:Person)  
+                   (person2 foaf:age 25)
+                   (person3 rdf:type schema:Organization)) test-graph)
+    
+    ;; Verify initial state
+    (should (= 5 (length (graph-query '(($s $p $o)) test-graph))))
+    
+    ;; Delete all ages
+    (should (eq t (delete-data '(($person foaf:age $age)) test-graph)))
+    
+    ;; Verify deletion
+    (should (= 3 (length (graph-query '(($s $p $o)) test-graph))))
+    (should (not (ask '(($s foaf:age $age)) test-graph)))
+    
+    ;; Verify people still exist
+    (should (= 2 (length (graph-query '(($s rdf:type foaf:Person)) test-graph))))))
+
+(ert-deftest test-delete-data-no-matches ()
+  "Test delete-data when no triples match the pattern"
+  (let ((test-graph (make-graph)))
+    ;; Add test data
+    (add-triple '(person1 rdfs:label "John") test-graph)
+    
+    ;; Try to delete non-matching pattern
+    (should-not (delete-data '(($s foaf:age $age)) test-graph))
+    
+    ;; Original data should still exist
+    (should (= 1 (length (graph-query '(($s $p $o)) test-graph))))))
+
+(ert-deftest test-delete-data-with-optional ()
+  "Test delete-data with OPTIONAL clauses"
+  (let ((test-graph (make-graph)))
+    ;; Add test data - some people have optional properties
+    (add-triples '((person1 rdf:type foaf:Person)
+                   (person1 foaf:age 30)
+                   (person2 rdf:type foaf:Person)
+                   (person3 rdf:type foaf:Person)
+                   (person3 foaf:age 25)) test-graph)
+    
+    ;; Delete using pattern with OPTIONAL
+    (should (eq t (delete-data '(($p rdf:type foaf:Person)
+                                (optional ($p foaf:age $age))) test-graph)))
+    
+    ;; Only the main pattern triples should be deleted (not the optional parts)
+    (should (= 2 (length (graph-query '(($s $p $o)) test-graph))))
+    ;; Verify the foaf:age triples remain (optional parts weren't deleted)
+    (should (= 2 (length (graph-query '(($s foaf:age $age)) test-graph))))
+    ;; Verify no rdf:type foaf:Person triples remain (main pattern was deleted)
+    (should (not (ask '(($s rdf:type foaf:Person)) test-graph)))))
+
+(ert-deftest test-delete-data-error-handling ()
+  "Test delete-data error handling with malformed patterns"
+  (let ((test-graph (make-graph)))
+    ;; Add test data
+    (add-triple '(person1 rdfs:label "John") test-graph)
+    
+    ;; Try delete with malformed pattern (should return nil, not error)
+    (should-not (delete-data '((malformed)) test-graph))
+    (should-not (delete-data '() test-graph))
+    
+    ;; Original data should still exist
+    (should (= 1 (length (graph-query '(($s $p $o)) test-graph))))))
+
 (provide 'test-el-rdf)
 ;;; test-el-rdf.el ends here

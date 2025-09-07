@@ -4,7 +4,7 @@
 
 ;; Author: Ian FitzPatrick ian@ianfitzpatrick.eu
 ;; URL: codeberg.org/ifitzpat/el-rdf
-;; Version: 0.0.18
+;; Version: 0.1.0
 ;; Package-Requires: ((emacs "27.1")(request)(dash "20250312.1307"))
 ;; Keywords: rdf triple-store
 
@@ -514,6 +514,22 @@ EXECUTION PATHS:
           (let ((subject (car terse))
       	  (predobj (maybe-relist-obj (cdr terse) )))
             (expand-duals predobj subject)))
+
+(defun delete-data (where graph)
+  "Delete all triples matching the WHERE pattern from GRAPH.
+WHERE is a list of triple patterns that may include variables and OPTIONAL clauses.
+Returns t if deletion succeeded, nil if no matches found or query failed.
+
+Examples:
+  (delete-data '(($s rdf:type foaf:Person)) graph)  ; Delete all people
+  (delete-data '(($p foaf:age $age)) graph)        ; Delete all age properties"
+  (condition-case nil
+      (let* ((bindings (graph-query where graph))
+             (triples-to-delete (construct where bindings)))
+        (when triples-to-delete
+          (delete-triples triples-to-delete graph)
+          t))
+    (error nil)))
 
 (defun construct (clauses where)
   (mapcan (lambda (l)

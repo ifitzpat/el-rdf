@@ -1,6 +1,7 @@
 #+TITLE: el-rdf
-# This README template was copied from  org-ql's README.org. Credit goes to alphapapa.
+# In-memory RDF Triple Store for Emacs Lisp
 
+*el-rdf* is an in-memory triple store (RDF graph database) implemented in Emacs Lisp. It provides functionality for storing, querying, and visualizing RDF triples using SPARQL-like operations directly within Emacs.
 
 *Disclaimer:* el-rdf is currently in alpha
 
@@ -10,24 +11,49 @@
 :END:
 :CONTENTS:
 - [[#features][Features]]
-- [[#screenshots][Screenshots]]
+- [[#architecture][Architecture]]
 - [[#installation][Installation]]
 - [[#usage][Usage]]
+- [[#api-reference][API Reference]]
 - [[#changelog][Changelog]]
 - [[#notes][Notes]]
 :END:
 
 * Features
 
-+ placeholder
++ **In-memory RDF storage** with efficient triple-indexed access
++ **SPARQL-like query language** with pattern matching and variables
++ **Comprehensive CRUD operations** - Create, Read, Update, Delete
++ **Graph visualization** via Graphviz DOT format export
 
-/Planned features & improvements:/
+/Key query operations:/
 
-+ placeholder
++ **SELECT** - Extract variable bindings from query results
++ **ASK** - Boolean queries returning true/false
++ **CONSTRUCT** - Build new triples from query results
++ **FILTER** - Apply custom predicates to filter results
++ **DELETE-DATA** - Pattern based deletio 
 
-* Screenshots
+* Architecture
 
-Coming soon
+** Core Data Structure
+
+el-rdf uses three hash table indices for efficient querying:
+- **SPO** (Subject-Predicate-Object): Primary index by subject
+- **OSP** (Object-Subject-Predicate): Index by object for reverse lookups  
+- **POS** (Predicate-Object-Subject): Index by predicate
+
+** Triple Storage
+
+Constituents of triples are:
+1. **Lisp symbols** (e.g. ='rdfs:label=) with no bound variable or function (although you can
+   freely bind whatever you like to any symbol in the triple)
+2. **Strings** (e.g. ="example"=) 
+3. **Numbers** (e.g. =42=)
+
+** Variable System
+
+Variables are symbols starting with =$= (e.g., =$subject=, =$predicate=). The symbol =t= serves as a wildcard matching any value.
 
 * Installation
 :PROPERTIES:
@@ -36,12 +62,15 @@ Coming soon
 
 ** Dependencies
 
- - placeholder
+- **Emacs** 27.1+
+- **dash** - List manipulation library  
+- **cl-seq** - Common Lisp sequence functions
+- **Graphviz** =dot= command (optional, for visualization)
 
 ** Quelpa
 
-The package =el-rdf= is not currently available from [[https://melpa.org/#/org-ql][MELPA]], but can be installed
-directly from github with [[https://framagit.org/steckerhalter/quelpa][Quelpa]].
+The package =el-rdf= is not currently available from [[https://melpa.org/#/][MELPA]], but can be installed
+directly from Codeberg with [[https://framagit.org/steckerhalter/quelpa][Quelpa]].
 
 Installing with [[https://framagit.org/steckerhalter/quelpa][Quelpa]] is easy:
 
@@ -50,27 +79,172 @@ Installing with [[https://framagit.org/steckerhalter/quelpa][Quelpa]] is easy:
 
 #+BEGIN_SRC elisp
 (use-package el-rdf
-  :quelpa (el-rdf :fetcher codeberg :repo "ifitzpat/el-rdf")
-  )
+  :quelpa (el-rdf :fetcher codeberg :repo "ifitzpat/el-rdf"))
 #+END_SRC
 
 * Usage
 :PROPERTIES:
-:TOC:      :include descendants :depth 1
+:TOC:      :include descendants :depth 2
 :END:
 :CONTENTS:
-- [[#commands][Commands]]
+- [[#basic-operations][Basic Operations]]
+- [[#querying][Querying]]
+- [[#deletion-operations][Deletion Operations]]
+- [[#visualization][Visualization]]
 :END:
 
-# These links work on GitHub's Org renderer but not in Org.
+** Basic Operations
 
-** Commands
-:PROPERTIES:
-:TOC:      ignore-children
-:END:
+*** Creating and Managing Graphs
 
-+  *Placeholder*
-     - =placeholder=
+#+BEGIN_SRC elisp
+;; Create a new graph
+(setq my-graph (make-graph))
+
+;; Add a single triple
+(add-triple '(person1 foaf:name "John Doe") my-graph)
+
+;; Add multiple triples
+(add-triples '((person1 rdf:type foaf:Person)
+               (person1 foaf:age 30)
+               (person1 foaf:knows person2)
+               (person2 foaf:name "Alice Smith")) my-graph)
+#+END_SRC
+
+** Querying
+
+*** Basic Pattern Matching
+
+#+BEGIN_SRC elisp
+;; Boolean queries (ASK)
+(ask '((person1 foaf:name "John Doe")) my-graph)
+;; => t
+
+;; Get all triples about person1
+(graph-query '(($p $r $o)) my-graph)  ; All triples
+(graph-query '((person1 $p $o)) my-graph)  ; All properties of person1
+#+END_SRC
+
+*** SELECT Queries
+
+#+BEGIN_SRC elisp
+;; Find all people and their names
+(let ((results (graph-query '(($person rdf:type foaf:Person)
+                               ($person foaf:name $name)) my-graph)))
+  (select '($person $name) results))
+;; => ((person1 "John Doe") (person2 "Alice Smith"))
+#+END_SRC
+
+*** OPTIONAL Clauses
+
+#+BEGIN_SRC elisp
+;; Find all people, optionally with their ages
+(let ((results (graph-query '(($person rdf:type foaf:Person)
+                               (optional ($person foaf:age $age))) my-graph)))
+  (select '($person $age) results))
+;; => ((person1 30) (person2 nil))
+#+END_SRC
+
+*** CONSTRUCT Queries
+
+#+BEGIN_SRC elisp
+;; Build new triples from query results
+(let ((results (graph-query '(($person foaf:name $name)) my-graph)))
+  (construct '(($person rdfs:label $name)) results))
+;; => ((person1 rdfs:label "John Doe") (person2 rdfs:label "Alice Smith"))
+#+END_SRC
+
+*** FILTER Operations
+
+#+BEGIN_SRC elisp
+;; Filter results using custom predicates
+(let* ((results (graph-query '(($person foaf:age $age)) my-graph))
+       (filtered (filter (lambda () (> $age 25)) results)))
+  (select '($person $age) filtered))
+;; => ((person1 30))
+#+END_SRC
+
+** Deletion Operations
+
+*** Basic Triple Deletion
+
+#+BEGIN_SRC elisp
+;; Delete a single triple
+(delete-triple '(person1 foaf:age 30) my-graph)
+
+;; Delete multiple triples
+(delete-triples '((person1 foaf:age 30) 
+                  (person2 foaf:age 25)) my-graph)
+#+END_SRC
+
+*** Pattern-Based Deletion
+
+#+BEGIN_SRC elisp
+;; Delete all ages
+(delete-data '(($person foaf:age $age)) my-graph)
+;; => t (success)
+
+;; Delete all people
+(delete-data '(($s rdf:type foaf:Person)) my-graph)
+;; => t (success)
+
+;; Delete with complex patterns
+(delete-data '(($person rdf:type foaf:Person)
+               ($person foaf:name $name)) my-graph)
+;; => t (success)
+#+END_SRC
+
+*** OPTIONAL in Deletion
+
+#+BEGIN_SRC elisp
+;; Delete person types, but preserve optional age information
+(delete-data '(($p rdf:type foaf:Person) 
+               (optional ($p foaf:age $age))) my-graph)
+;; => t (deletes rdf:type triples, keeps foaf:age triples)
+#+END_SRC
+
+** Visualization
+
+#+BEGIN_SRC elisp
+;; Export graph to SVG via Graphviz
+(let ((all-triples (triples '(t t t) my-graph)))
+  (render-graph all-triples "my-graph.svg"))
+
+;; Export to JSON format
+(let ((all-triples (triples '(t t t) my-graph)))
+  (render-graph-json all-triples "my-graph.json"))
+
+;; Generate DOT format directly
+(let ((all-triples (triples '(t t t) my-graph)))
+  (render-triples all-triples))
+#+END_SRC
+
+* API Reference
+
+** Core Functions
+
+- =make-graph= - Create a new empty graph
+- =add-triple= (triple graph) - Add a single triple  
+- =add-triples= (triplist graph) - Add multiple triples
+- =delete-triple= (triple graph) - Delete a single triple
+- =delete-triples= (triplist graph) - Delete multiple triples
+- =delete-data= (where graph) - Pattern-based deletion
+
+** Query Functions
+
+- =graph-query= (clauses graph &optional bindings) - Core query function (aliased as =where=)
+- =ask= (where graph) - Boolean queries
+- =select= (binding-list where) - SELECT queries  
+- =construct= (clauses where) - CONSTRUCT queries
+- =filter= (predicate bindinglist) - Filter results
+
+** Utility Functions
+
+- =triples= (pattern graph) - Retrieve triples matching pattern
+- =save-graph= (graph filename) - Save graph to file
+- =load-graph= (graph filename) - Load graph from file
+- =render-graph= (triples filename &optional styles) - Export to SVG
+- =render-graph-json= (triples filename &optional styles) - Export to JSON
 
 * Changelog
 :PROPERTIES:
@@ -79,7 +253,7 @@ Installing with [[https://framagit.org/steckerhalter/quelpa][Quelpa]] is easy:
 
 /Note:/ Breaking changes may be made before version 1.0, but in the event of major changes, attempts at backward compatibility will be made with obsolescence declarations, translation of arguments, etc.  Users who need stability guarantees before 1.0 may choose to use tagged stable releases.
 
-** 0.0.1-alpha
+** 0.1.0
 
 Initial release
 

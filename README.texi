@@ -23,6 +23,8 @@
 @node Top
 @top el-rdf
 
+@strong{el-rdf} is an in-memory triple store (RDF graph database) implemented in Emacs Lisp. It provides functionality for storing, querying, and visualizing RDF triples using SPARQL-like operations directly within Emacs.
+
 @strong{Disclaimer:} el-rdf is currently in alpha
 
 @end ifnottex
@@ -30,15 +32,22 @@
 @menu
 * Contents::
 * Features::
-* Screenshots::
+* Architecture::
 * Installation::
 * Usage::
+* API Reference::
 * Changelog::
 * Notes::
 * License::
 
 @detailmenu
 --- The Detailed Node Listing ---
+
+Architecture
+
+* Core Data Structure::
+* Triple Storage::
+* Variable System::
 
 Installation
 
@@ -47,11 +56,47 @@ Installation
 
 Usage
 
-* Commands::
+* Basic Operations::
+* Creating and Managing Graphs::
+* Querying::
+* Basic Pattern Matching::
+* SELECT Queries::
+* OPTIONAL Clauses::
+* CONSTRUCT Queries::
+* FILTER Operations::
+* Deletion Operations::
+* Basic Triple Deletion::
+* Pattern-Based Deletion::
+* OPTIONAL in Deletion::
+* Visualization::
+
+Basic Operations
+
+* Creating and Managing Graphs::
+
+Querying
+
+* Basic Pattern Matching::
+* SELECT Queries::
+* OPTIONAL Clauses::
+* CONSTRUCT Queries::
+* FILTER Operations::
+
+Deletion Operations
+
+* Basic Triple Deletion::
+* Pattern-Based Deletion::
+* OPTIONAL in Deletion::
+
+API Reference
+
+* Core Functions::
+* Query Functions::
+* Utility Functions::
 
 Changelog
 
-* 0.0.1-alpha: 001-alpha. 
+* 0.1.0: 010. 
 
 Notes
 
@@ -71,6 +116,7 @@ Notes
 @item
 @item
 @item
+@item
 @end itemize
 
 @node Features
@@ -78,20 +124,70 @@ Notes
 
 @itemize
 @item
-placeholder
+@strong{@strong{In-memory RDF storage}} with efficient triple-indexed access
+@item
+@strong{@strong{SPARQL-like query language}} with pattern matching and variables
+@item
+@strong{@strong{Comprehensive CRUD operations}} - Create, Read, Update, Delete
+@item
+@strong{@strong{Graph visualization}} via Graphviz DOT format export
 @end itemize
 
-@emph{Planned features & improvements:}
+@emph{Key query operations:}
 
 @itemize
 @item
-placeholder
+@strong{@strong{SELECT}} - Extract variable bindings from query results
+@item
+@strong{@strong{ASK}} - Boolean queries returning true/false
+@item
+@strong{@strong{CONSTRUCT}} - Build new triples from query results
+@item
+@strong{@strong{FILTER}} - Apply custom predicates to filter results
+@item
+@strong{@strong{DELETE-DATA}} - Pattern based deletio 
 @end itemize
 
-@node Screenshots
-@chapter Screenshots
+@node Architecture
+@chapter Architecture
 
-Coming soon
+@menu
+* Core Data Structure::
+* Triple Storage::
+* Variable System::
+@end menu
+
+@node Core Data Structure
+@section Core Data Structure
+
+el-rdf uses three hash table indices for efficient querying:
+@itemize
+@item
+@strong{@strong{SPO}} (Subject-Predicate-Object): Primary index by subject
+@item
+@strong{@strong{OSP}} (Object-Subject-Predicate): Index by object for reverse lookups  
+@item
+@strong{@strong{POS}} (Predicate-Object-Subject): Index by predicate
+@end itemize
+
+@node Triple Storage
+@section Triple Storage
+
+Constituents of triples are:
+@enumerate
+@item
+@strong{@strong{Lisp symbols}} (e.g. @samp{'rdfs:label}) with no bound variable or function (although you can
+freely bind whatever you like to any symbol in the triple)
+@item
+@strong{@strong{Strings}} (e.g. @samp{"example"}) 
+@item
+@strong{@strong{Numbers}} (e.g. @samp{42})
+@end enumerate
+
+@node Variable System
+@section Variable System
+
+Variables are symbols starting with @samp{$} (e.g., @samp{$subject}, @samp{$predicate}). The symbol @samp{t} serves as a wildcard matching any value.
 
 @node Installation
 @chapter Installation
@@ -106,14 +202,20 @@ Coming soon
 
 @itemize
 @item
-placeholder
+@strong{@strong{Emacs}} 27.1+
+@item
+@strong{@strong{dash}} - List manipulation library  
+@item
+@strong{@strong{cl-seq}} - Common Lisp sequence functions
+@item
+@strong{@strong{Graphviz}} @samp{dot} command (optional, for visualization)
 @end itemize
 
 @node Quelpa
 @section Quelpa
 
-The package @samp{el-rdf} is not currently available from @uref{https://melpa.org/#/org-ql, MELPA}, but can be installed
-directly from github with @uref{https://framagit.org/steckerhalter/quelpa, Quelpa}.
+The package @samp{el-rdf} is not currently available from @uref{https://melpa.org/#/, MELPA}, but can be installed
+directly from Codeberg with @uref{https://framagit.org/steckerhalter/quelpa, Quelpa}.
 
 Installing with @uref{https://framagit.org/steckerhalter/quelpa, Quelpa} is easy:
 
@@ -126,8 +228,7 @@ Add this form to your init file:
 
 @lisp
 (use-package el-rdf
-  :quelpa (el-rdf :fetcher codeberg :repo "ifitzpat/el-rdf")
-  )
+  :quelpa (el-rdf :fetcher codeberg :repo "ifitzpat/el-rdf"))
 @end lisp
 
 @node Usage
@@ -135,22 +236,241 @@ Add this form to your init file:
 
 @itemize
 @item
+@item
+@item
+@item
 @end itemize
 
 @menu
-* Commands::
+* Basic Operations::
+* Creating and Managing Graphs::
+* Querying::
+* Basic Pattern Matching::
+* SELECT Queries::
+* OPTIONAL Clauses::
+* CONSTRUCT Queries::
+* FILTER Operations::
+* Deletion Operations::
+* Basic Triple Deletion::
+* Pattern-Based Deletion::
+* OPTIONAL in Deletion::
+* Visualization::
 @end menu
 
-@node Commands
-@section Commands
+@node Basic Operations
+@section Basic Operations
+
+@menu
+* Creating and Managing Graphs::
+@end menu
+
+@node Creating and Managing Graphs
+@section Creating and Managing Graphs
+
+@lisp
+;; Create a new graph
+(setq my-graph (make-graph))
+
+;; Add a single triple
+(add-triple '(person1 foaf:name "John Doe") my-graph)
+
+;; Add multiple triples
+(add-triples '((person1 rdf:type foaf:Person)
+               (person1 foaf:age 30)
+               (person1 foaf:knows person2)
+               (person2 foaf:name "Alice Smith")) my-graph)
+@end lisp
+
+@node Querying
+@section Querying
+
+@menu
+* Basic Pattern Matching::
+* SELECT Queries::
+* OPTIONAL Clauses::
+* CONSTRUCT Queries::
+* FILTER Operations::
+@end menu
+
+@node Basic Pattern Matching
+@section Basic Pattern Matching
+
+@lisp
+;; Boolean queries (ASK)
+(ask '((person1 foaf:name "John Doe")) my-graph)
+;; => t
+
+;; Get all triples about person1
+(graph-query '(($p $r $o)) my-graph)  ; All triples
+(graph-query '((person1 $p $o)) my-graph)  ; All properties of person1
+@end lisp
+
+@node SELECT Queries
+@section SELECT Queries
+
+@lisp
+;; Find all people and their names
+(let ((results (graph-query '(($person rdf:type foaf:Person)
+                               ($person foaf:name $name)) my-graph)))
+  (select '($person $name) results))
+;; => ((person1 "John Doe") (person2 "Alice Smith"))
+@end lisp
+
+@node OPTIONAL Clauses
+@section OPTIONAL Clauses
+
+@lisp
+;; Find all people, optionally with their ages
+(let ((results (graph-query '(($person rdf:type foaf:Person)
+                               (optional ($person foaf:age $age))) my-graph)))
+  (select '($person $age) results))
+;; => ((person1 30) (person2 nil))
+@end lisp
+
+@node CONSTRUCT Queries
+@section CONSTRUCT Queries
+
+@lisp
+;; Build new triples from query results
+(let ((results (graph-query '(($person foaf:name $name)) my-graph)))
+  (construct '(($person rdfs:label $name)) results))
+;; => ((person1 rdfs:label "John Doe") (person2 rdfs:label "Alice Smith"))
+@end lisp
+
+@node FILTER Operations
+@section FILTER Operations
+
+@lisp
+;; Filter results using custom predicates
+(let* ((results (graph-query '(($person foaf:age $age)) my-graph))
+       (filtered (filter (lambda () (> $age 25)) results)))
+  (select '($person $age) filtered))
+;; => ((person1 30))
+@end lisp
+
+@node Deletion Operations
+@section Deletion Operations
+
+@menu
+* Basic Triple Deletion::
+* Pattern-Based Deletion::
+* OPTIONAL in Deletion::
+@end menu
+
+@node Basic Triple Deletion
+@section Basic Triple Deletion
+
+@lisp
+;; Delete a single triple
+(delete-triple '(person1 foaf:age 30) my-graph)
+
+;; Delete multiple triples
+(delete-triples '((person1 foaf:age 30) 
+                  (person2 foaf:age 25)) my-graph)
+@end lisp
+
+@node Pattern-Based Deletion
+@section Pattern-Based Deletion
+
+@lisp
+;; Delete all ages
+(delete-data '(($person foaf:age $age)) my-graph)
+;; => t (success)
+
+;; Delete all people
+(delete-data '(($s rdf:type foaf:Person)) my-graph)
+;; => t (success)
+
+;; Delete with complex patterns
+(delete-data '(($person rdf:type foaf:Person)
+               ($person foaf:name $name)) my-graph)
+;; => t (success)
+@end lisp
+
+@node OPTIONAL in Deletion
+@section OPTIONAL in Deletion
+
+@lisp
+;; Delete person types, but preserve optional age information
+(delete-data '(($p rdf:type foaf:Person) 
+               (optional ($p foaf:age $age))) my-graph)
+;; => t (deletes rdf:type triples, keeps foaf:age triples)
+@end lisp
+
+@node Visualization
+@section Visualization
+
+@lisp
+;; Export graph to SVG via Graphviz
+(let ((all-triples (triples '(t t t) my-graph)))
+  (render-graph all-triples "my-graph.svg"))
+
+;; Export to JSON format
+(let ((all-triples (triples '(t t t) my-graph)))
+  (render-graph-json all-triples "my-graph.json"))
+
+;; Generate DOT format directly
+(let ((all-triples (triples '(t t t) my-graph)))
+  (render-triples all-triples))
+@end lisp
+
+@node API Reference
+@chapter API Reference
+
+@menu
+* Core Functions::
+* Query Functions::
+* Utility Functions::
+@end menu
+
+@node Core Functions
+@section Core Functions
 
 @itemize
 @item
-@strong{Placeholder}
+@samp{make-graph} - Create a new empty graph
+@item
+@samp{add-triple} (triple graph) - Add a single triple  
+@item
+@samp{add-triples} (triplist graph) - Add multiple triples
+@item
+@samp{delete-triple} (triple graph) - Delete a single triple
+@item
+@samp{delete-triples} (triplist graph) - Delete multiple triples
+@item
+@samp{delete-data} (where graph) - Pattern-based deletion
+@end itemize
+
+@node Query Functions
+@section Query Functions
+
 @itemize
 @item
-@samp{placeholder}
+@samp{graph-query} (clauses graph &optional bindings) - Core query function (aliased as @samp{where})
+@item
+@samp{ask} (where graph) - Boolean queries
+@item
+@samp{select} (binding-list where) - SELECT queries  
+@item
+@samp{construct} (clauses where) - CONSTRUCT queries
+@item
+@samp{filter} (predicate bindinglist) - Filter results
 @end itemize
+
+@node Utility Functions
+@section Utility Functions
+
+@itemize
+@item
+@samp{triples} (pattern graph) - Retrieve triples matching pattern
+@item
+@samp{save-graph} (graph filename) - Save graph to file
+@item
+@samp{load-graph} (graph filename) - Load graph from file
+@item
+@samp{render-graph} (triples filename &optional styles) - Export to SVG
+@item
+@samp{render-graph-json} (triples filename &optional styles) - Export to JSON
 @end itemize
 
 @node Changelog
@@ -159,11 +479,11 @@ Add this form to your init file:
 @emph{Note:} Breaking changes may be made before version 1.0, but in the event of major changes, attempts at backward compatibility will be made with obsolescence declarations, translation of arguments, etc.  Users who need stability guarantees before 1.0 may choose to use tagged stable releases.
 
 @menu
-* 0.0.1-alpha: 001-alpha. 
+* 0.1.0: 010. 
 @end menu
 
-@node 001-alpha
-@section 0.0.1-alpha
+@node 010
+@section 0.1.0
 
 Initial release
 
