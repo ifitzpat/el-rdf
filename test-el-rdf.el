@@ -110,5 +110,103 @@
     (should (-any (lambda (row) (and (eq (car row) 'person2) (eq (cadr row) nil))) result))
     (should (-any (lambda (row) (and (eq (car row) 'person3) (string= (cadr row) "Alice"))) result))))
 
+(ert-deftest test-delete-triple-basic ()
+  "Test basic triple deletion functionality"
+  (let ((test-graph (make-graph)))
+    ;; Add some triples
+    (add-triples '((person1 rdf:type schema:Person)
+                   (person1 rdfs:label "John")
+                   (person1 foaf:age 30)) test-graph)
+    
+    ;; Verify triples exist using graph-query (proper pattern matching)
+    (should (= 3 (length (graph-query '(($p $r $o)) test-graph))))
+    (should (= 1 (length (graph-query '((person1 rdfs:label $name)) test-graph))))
+    
+    ;; Delete one triple
+    (delete-triple '(person1 rdfs:label "John") test-graph)
+    
+    ;; Verify deletion using graph-query
+    (should (= 2 (length (graph-query '(($p $r $o)) test-graph))))
+    (should (not (ask '((person1 rdfs:label $name)) test-graph)))
+    
+    ;; Verify remaining triples still exist
+    (should (= 1 (length (graph-query '((person1 rdf:type $type)) test-graph))))
+    (should (= 1 (length (graph-query '((person1 foaf:age $age)) test-graph))))))
+
+(ert-deftest test-delete-triple-cleanup ()
+  "Test that DELETE properly cleans up empty hash entries"
+  (let ((test-graph (make-graph)))
+    ;; Add a single triple
+    (add-triple '(person1 rdfs:label "John") test-graph)
+    
+    ;; Verify it exists in all indices
+    (should (gethash 'person1 (cdr (assoc 'spo test-graph))))
+    (should (gethash "John" (cdr (assoc 'osp test-graph))))
+    (should (gethash 'rdfs:label (cdr (assoc 'pos test-graph))))
+    
+    ;; Delete the triple
+    (delete-triple '(person1 rdfs:label "John") test-graph)
+    
+    ;; Verify complete cleanup - no entries should remain in hash tables
+    (should-not (gethash 'person1 (cdr (assoc 'spo test-graph))))
+    (should-not (gethash "John" (cdr (assoc 'osp test-graph))))
+    (should-not (gethash 'rdfs:label (cdr (assoc 'pos test-graph))))))
+
+(ert-deftest test-delete-triple-partial-cleanup ()
+  "Test that DELETE only removes specific values, not entire entries when other values exist"
+  (let ((test-graph (make-graph)))
+    ;; Add multiple triples with same subject
+    (add-triples '((person1 rdfs:label "John")
+                   (person1 foaf:age 30)
+                   (person1 rdf:type schema:Person)) test-graph)
+    
+    ;; Verify all exist using graph-query
+    (should (= 3 (length (graph-query '((person1 $p $o)) test-graph))))
+    
+    ;; Delete one triple
+    (delete-triple '(person1 rdfs:label "John") test-graph)
+    
+    ;; Verify person1 still has entry in SPO index (for other predicates)
+    (should (gethash 'person1 (cdr (assoc 'spo test-graph))))
+    ;; But rdfs:label should be gone - use graph-query for proper pattern matching
+    (should (= 2 (length (graph-query '((person1 $p $o)) test-graph))))
+    (should (not (ask '((person1 rdfs:label $name)) test-graph)))))
+
+(ert-deftest test-delete-triples-bulk ()
+  "Test bulk deletion with delete-triples function"
+  (let ((test-graph (make-graph)))
+    ;; Add multiple triples
+    (add-triples '((person1 rdf:type schema:Person)
+                   (person1 rdfs:label "John")
+                   (person2 rdf:type schema:Person)
+                   (person2 rdfs:label "Alice")) test-graph)
+    
+    ;; Verify initial state using graph-query
+    (should (= 4 (length (graph-query '(($s $p $o)) test-graph))))
+    
+    ;; Bulk delete
+    (delete-triples '((person1 rdfs:label "John")
+                      (person2 rdfs:label "Alice")) test-graph)
+    
+    ;; Verify deletions using graph-query
+    (should (= 2 (length (graph-query '(($s $p $o)) test-graph))))
+    (should (not (ask '(($s rdfs:label $name)) test-graph)))
+    (should (= 2 (length (graph-query '(($s rdf:type $type)) test-graph))))))
+
+(ert-deftest test-delete-nonexistent-triple ()
+  "Test that deleting non-existent triples doesn't break anything"
+  (let ((test-graph (make-graph)))
+    ;; Add one triple
+    (add-triple '(person1 rdfs:label "John") test-graph)
+    
+    ;; Try to delete non-existent triple (should not error)
+    (delete-triple '(person2 rdfs:label "Alice") test-graph)
+    (delete-triple '(person1 foaf:name "John") test-graph)
+    (delete-triple '(person1 rdfs:label "Alice") test-graph)
+    
+    ;; Original triple should still exist using graph-query
+    (should (= 1 (length (graph-query '(($s $p $o)) test-graph))))
+    (should (= 1 (length (graph-query '((person1 rdfs:label $name)) test-graph))))))
+
 (provide 'test-el-rdf)
 ;;; test-el-rdf.el ends here

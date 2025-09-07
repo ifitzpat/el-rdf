@@ -4,7 +4,7 @@
 
 ;; Author: Ian FitzPatrick ian@ianfitzpatrick.eu
 ;; URL: codeberg.org/ifitzpat/el-rdf
-;; Version: 0.0.17
+;; Version: 0.0.18
 ;; Package-Requires: ((emacs "27.1")(request)(dash "20250312.1307"))
 ;; Keywords: rdf triple-store
 
@@ -36,7 +36,7 @@
 
 (defun make-graph ()
 `((spo . ,(make-hash-table :test 'eq))
-  	(osp . ,(make-hash-table :test 'eq))
+  	(osp . ,(make-hash-table :test 'equal))
   	(pos . ,(make-hash-table :test 'eq))))
 
   (defun update-dual (key val orig)
@@ -48,6 +48,24 @@
   	  orig)
         (append `((,key . ,(list val))) orig))
       ))
+
+  (defun remove-dual (key val orig)
+    "Remove VAL from the list associated with KEY in ORIG. Returns updated alist.
+    If the resulting list is empty, removes the KEY entry entirely.
+    ORIG structure: ((key1 . (val1 val2)) (key2 . (val3 val4)))"
+    (let* ((entry (assoc key orig))
+           (oldvals (cdr entry)))
+      (if entry
+          (let ((newvals (remove val oldvals)))
+            (if newvals
+                ;; Update the entry with remaining values
+                (progn
+                  (setf (cdr entry) newvals)
+                  orig)
+              ;; No values left, remove the entire key entry
+              (remove entry orig)))
+        ;; Key not found, return original unchanged
+        orig)))
 
   (defun add-triple (triple graph)
     (let* ((newsub (nth 0 triple))
@@ -70,6 +88,46 @@
         (puthash newpred `((,newobj . ,(list newsub))) pos))
       ;; maybe refactor into cond
       ))
+
+  (defun delete-triple (triple graph)
+    "Remove a triple from the graph, updating all three indices (SPO, OSP, POS).
+    Automatically cleans up empty entries using remhash when no triples remain."
+    (let* ((sub (nth 0 triple))
+  	 (pred (nth 1 triple))
+  	 (obj (nth 2 triple))
+  	 (spo (cdr (assoc 'spo graph)))
+  	 (osp (cdr (assoc 'osp graph)))
+  	 (pos (cdr (assoc 'pos graph)))
+  	 (po (gethash sub spo))   ; alist ((p . (o1 o2 o3)))
+  	 (sp (gethash obj osp))   ; alist ((s . (p1 p2 p3)))
+  	 (os (gethash pred pos))) ; alist ((o . (s1 s2 s3)))
+
+      ;; Remove from SPO index: sub -> ((pred . (obj1 obj2...)))
+      (when po
+        (let ((updated-po (remove-dual pred obj po)))
+          (if updated-po
+              (puthash sub updated-po spo)
+            ;; No predicates left for this subject, remove entirely
+            (remhash sub spo))))
+
+      ;; Remove from OSP index: obj -> ((sub1 . (pred1 pred2...)))
+      (when sp
+        (let ((updated-sp (remove-dual sub pred sp)))
+          (if updated-sp
+              (puthash obj updated-sp osp)
+            ;; No subjects left for this object, remove entirely
+            (remhash obj osp))))
+
+      ;; Remove from POS index: pred -> ((obj1 . (sub1 sub2...)))
+      (when os
+        (let ((updated-os (remove-dual obj sub os)))
+          (if updated-os
+              (puthash pred updated-os pos)
+            ;; No objects left for this predicate, remove entirely
+            (remhash pred pos))))))
+
+
+
 
   (defun var-or-wild? (x)
     (or (eq x t) (variable? x)))
@@ -232,7 +290,12 @@
   ;;   ($b . "foo")))
 
   (defun add-triples (triplist graph)
+    "Add multiple triples to the graph."
     (mapc (lambda (x) (add-triple x graph)) triplist))
+
+  (defun delete-triples (triplist graph)
+    "Delete multiple triples from the graph."
+    (mapc (lambda (x) (delete-triple x graph)) triplist))
 
 
   (defun apply-clauses (clauses graph)
@@ -283,7 +346,7 @@
 
   (defun graph-query (clauses graph &optional bindings)
     "Execute a SPARQL-like query against a graph, supporting OPTIONAL clauses.
-    
+
 CLAUSES is a list of triple patterns, e.g., '(($s rdf:type foaf:Person) ($s foaf:name $name))
 GRAPH is the RDF graph created with make-graph
 BINDINGS is the current variable bindings (used for recursive calls)
@@ -295,7 +358,7 @@ OPTIONAL SYNTAX:
 BINDING STRUCTURE:
   The function maintains a triple-nested binding structure throughout execution:
   - Level 1: List of binding sets (one per solution)
-  - Level 2: List of binding branches within each solution  
+  - Level 2: List of binding branches within each solution
   - Level 3: Individual variable bindings as (var . value) pairs
 
 EXAMPLES OF DATA FLOW:
@@ -303,32 +366,32 @@ EXAMPLES OF DATA FLOW:
 1. FIRST CALL (no bindings):
    Input:   clauses='(($s rdf:type foaf:Person) ($s foaf:name $name))
             bindings=nil
-   
+
    After first pattern match:
    bindings='((($s . alice)) (($s . bob)))
-   
+
    Wrapped for consistency:
    bindings='(((($s . alice))) ((($s . bob))))
 
 2. MULTIPLE BINDINGS (length > 1):
    Input:   clauses='(($s foaf:name $name))
             bindings='(((($s . alice))) ((($s . bob))))
-   
+
    For each binding branch:
    - alice: pattern becomes '(alice foaf:name $name)
    - bob: pattern becomes '(bob foaf:name $name)
-   
+
    Results might be:
    - alice: newbindings='((($name . \"Alice Smith\")))
    - bob: newbindings='() (no name found)
-   
+
    Final result:
    '(((($s . alice) ($name . \"Alice Smith\"))))
 
 3. SINGLE BINDING BRANCH:
    Input:   clauses='(($s foaf:email $email))
             bindings='((($s . alice) ($name . \"Alice Smith\")))
-   
+
    Substituted pattern: '(alice foaf:email $email)
    If match found: newbindings='((($email . \"alice@example.com\")))
    Final: '((($s . alice) ($name . \"Alice Smith\") ($email . \"alice@example.com\")))
