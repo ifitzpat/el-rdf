@@ -417,15 +417,7 @@ EXECUTION PATHS:
       ; (princ (format "DEBUG graph-query: clauses=%s, pattern=%s, bindings=%s\n" clauses pattern bindings))
 
       (cond ((or (not clauses) (< (length unwrapped-pattern) 3)) ; we're at the end of the list of clauses
-  	   ;; Ensure consistent triple-nesting: check if we need to wrap bindings
-  	   (if (and bindings
-  		    (listp (car bindings))
-  		    (listp (caar bindings))
-  		    (not (listp (caaar bindings))))
-  	       ;; Already properly triple-nested
-  	       bindings
-  	     ;; Need to add outer wrapper for consistency
-  	     (if bindings (list bindings) nil)))
+  	   bindings)
   	  ((not bindings) ; this is the first invocation
   	   (let ((bindings (traverse-graph unwrapped-pattern (triples unwrapped-pattern graph))))
   	     (when el-rdf-debug
@@ -480,7 +472,21 @@ EXECUTION PATHS:
 		     ;; For optional clauses that fail, continue with existing bindings
 		     (graph-query (cdr clauses) graph bindings)
 		   nil) 	   ; if nil then return nil
-  	       (graph-query (cl-sublis updated-bindings (cdr clauses)) graph updated-bindings))
+  	       (let ((result (graph-query (cl-sublis updated-bindings (cdr clauses)) graph updated-bindings)))
+  		 ;; For single-branch queries, ensure result has same structure as single-clause queries
+  		 ;; Single-clause queries return: (((bindings))) 
+  		 ;; But single-branch multi-clause can return: ((bindings))
+  		 ;; Check if result needs one more level of wrapping
+  		 (if (and result
+  			  (= 1 (length result))
+  			  (= 1 (length updated-bindings))
+  			  (consp (car result))
+  			  (consp (caar result))
+  			  ;; Check if (caaar result) is a symbol (binding pair key)
+  			  (symbolp (caaar result)))
+  		     ;; This looks like ((bindings)) but should be (((bindings)))
+  		     (list result)
+  		   result)))
   	     ) ;take the next clause
   					; get bindings associated with it
 
