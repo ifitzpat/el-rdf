@@ -4,7 +4,7 @@
 
 ;; Author: Ian FitzPatrick ian@ianfitzpatrick.eu
 ;; URL: codeberg.org/ifitzpat/el-rdf
-;; Version: 0.1.0
+;; Version: 0.1.1
 ;; Package-Requires: ((emacs "27.1")(request)(dash "20250312.1307"))
 ;; Keywords: rdf triple-store
 
@@ -417,7 +417,15 @@ EXECUTION PATHS:
       ; (princ (format "DEBUG graph-query: clauses=%s, pattern=%s, bindings=%s\n" clauses pattern bindings))
 
       (cond ((or (not clauses) (< (length unwrapped-pattern) 3)) ; we're at the end of the list of clauses
-  	   bindings)
+  	   ;; Ensure consistent triple-nesting: check if we need to wrap bindings
+  	   (if (and bindings
+  		    (listp (car bindings))
+  		    (listp (caar bindings))
+  		    (not (listp (caaar bindings))))
+  	       ;; Already properly triple-nested
+  	       bindings
+  	     ;; Need to add outer wrapper for consistency
+  	     (if bindings (list bindings) nil)))
   	  ((not bindings) ; this is the first invocation
   	   (let ((bindings (traverse-graph unwrapped-pattern (triples unwrapped-pattern graph))))
   	     (when el-rdf-debug
