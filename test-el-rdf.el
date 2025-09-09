@@ -426,6 +426,7 @@
     ;; Add only rdf:type triple
     (add-triple '(subject rdf:type foaf:Person) graph)
     ;; Query for 'a' should still find the rdf:type triple
+    ;; Note this only tests retrieval and not matching
     (let ((results (triples '($s a foaf:Person) graph)))
       (should results)
       (should (= 1 (length results)))
@@ -437,6 +438,7 @@
     ;; Add only 'a' triple
     (add-triple '(subject a foaf:Person) graph)
     ;; Query for rdf:type should still find the 'a' triple
+    ;; Note this only tests retrieval and not matching
     (let ((results (triples '($s rdf:type foaf:Person) graph)))
       (should results)
       (should (= 1 (length results)))
@@ -450,7 +452,7 @@
                    (bob rdf:type foaf:Person)
                    (charlie a foaf:Organization)) graph)
     ;; Query for all foaf:Person using rdf:type should find both alice and bob
-    (let ((results (triples '($s rdf:type foaf:Person) graph)))
+    (let ((results (graph-query '(($s rdf:type foaf:Person)) graph)))
       (should (= 2 (length results)))
       ;; Results should contain both alice and bob (order may vary)
       (should (member '(alice rdf:type foaf:Person) results))
