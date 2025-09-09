@@ -173,7 +173,9 @@
 (defun transform-a-results-to-rdf-type (triples)
 (let ((transformed-results
                      (mapcar (lambda (triple)
-                              (list (nth 0 triple) 'rdf:type (nth 2 triple)))
+			       (if (eq (nth 1 triple) 'a)
+				   (list (nth 0 triple) 'rdf:type (nth 2 triple))
+				   triple))
                             triples)))
 		transformed-results))
 
