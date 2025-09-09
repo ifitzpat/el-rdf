@@ -44,7 +44,10 @@
     (let* ((oldval (cdr (assoc key orig)))) ; '(val1 val2 val3)
       (if oldval
   	(progn
-  	  (setf (cdr (assoc key orig)) (unless (member val oldval)(cons val oldval)))
+	;  (princ (format "\noldval: %s\n\n" oldval))
+	;  (princ (format "\nval: %s\n\n" val))
+  	  (setf (cdr (assoc key orig)) ;; change the alist
+		(if (member val oldval) oldval (cons val oldval)))
   	  orig)
         (append `((,key . ,(list val))) orig))
       ))
@@ -71,6 +74,7 @@
     (let* ((newsub (nth 0 triple))
   	 (newpred (if (eq (nth 1 triple) 'rdf:type) 'a (nth 1 triple))) ; Normalize rdf:type to 'a'
   	 (newobj (nth 2 triple))
+	 ;(for-debug (princ (format "\n\nadding %s %s %s\n\n" newsub newpred newobj)))
   	 (spo (cdr (assoc 'spo graph)))
   	 (osp (cdr (assoc 'osp graph)))
   	 (pos (cdr (assoc 'pos graph)))
@@ -78,7 +82,9 @@
   	 (sp (gethash newobj osp)) ; alist ((s . (p1 p2 p3)))
   	 (os (gethash newpred pos))) ; alist ((o . (s1 s2 s3)))
       (if po ; a triple with that subject exists
-          (puthash newsub (update-dual newpred newobj po) spo)
+          (progn
+	  ;  (princ (format "subject exists %s\n\n" newsub))
+	    (puthash newsub (update-dual newpred newobj po) spo) )
         (puthash newsub `((,newpred . ,(list newobj))) spo))
       (if sp
           (puthash newobj (update-dual newsub newpred sp) osp)

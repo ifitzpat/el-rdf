@@ -454,14 +454,21 @@
     ;; Query for all foaf:Person using rdf:type should find both alice and bob
     (let ((results (graph-query '(($s rdf:type foaf:Person)) graph)))
       (should (= 2 (length results)))
-      ;; Results should contain both alice and bob (order may vary)
-      (should (member '(alice rdf:type foaf:Person) results))
-      (should (member '(bob rdf:type foaf:Person) results)))
+      ;; Extract the $s bindings from the results
+      (let ((subjects (mapcar (lambda (binding-set)
+                               (cdr (assoc '$s (car binding-set))))
+                             results)))
+        (should (member 'alice subjects))
+        (should (member 'bob subjects))))
     ;; Query for all foaf:Person using 'a' should also find both alice and bob
-    (let ((results (triples '($s a foaf:Person) graph)))
+    (let ((results (graph-query '(($s a foaf:Person)) graph)))
       (should (= 2 (length results)))
-      (should (member '(alice a foaf:Person) results))
-      (should (member '(bob a foaf:Person) results)))))
+      ;; Extract the $s bindings from the results
+      (let ((subjects (mapcar (lambda (binding-set)
+                               (cdr (assoc '$s (car binding-set))))
+                             results)))
+        (should (member 'alice subjects))
+        (should (member 'bob subjects))))))
 
 (ert-deftest test-graph-query-with-a-rdf-type-equivalence ()
   "Test that graph-query works with a/rdf:type equivalence."
