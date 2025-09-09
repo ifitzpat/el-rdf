@@ -293,9 +293,9 @@
     "Add multiple triples to the graph."
     (mapc (lambda (x)
 	    (when (eq (nth 1 x) 'a)
-	      (add-triple `((nth 0 x) rdf:type (nth 2 x))))
+	      (add-triple `((nth 0 x) rdf:type (nth 2 x)) graph))
     	    (when (eq (nth 1 x) 'rdf:type)
-	      (add-triple `((nth 0 x) a (nth 2 x))))
+	      (add-triple `((nth 0 x) a (nth 2 x)) graph))
 	    (add-triple x graph)
 	    ) triplist))
 
