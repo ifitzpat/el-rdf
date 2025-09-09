@@ -418,5 +418,66 @@
           (should (eq (type-of first-solution) (type-of other-solution)))
           (should (eq (type-of (car first-solution)) (type-of (car other-solution)))))))))
 
+;;; a/rdf:type equivalence tests
+
+(ert-deftest test-query-time-a-finds-rdf-type ()
+  "Test that querying for 'a' also finds 'rdf:type' triples."
+  (let ((graph (make-graph)))
+    ;; Add only rdf:type triple
+    (add-triple '(subject rdf:type foaf:Person) graph)
+    ;; Query for 'a' should still find the rdf:type triple
+    (let ((results (triples '($s a foaf:Person) graph)))
+      (should results)
+      (should (= 1 (length results)))
+      (should (equal (car results) '(subject a foaf:Person))))))
+
+(ert-deftest test-query-time-rdf-type-finds-a ()
+  "Test that querying for 'rdf:type' also finds 'a' triples."
+  (let ((graph (make-graph)))
+    ;; Add only 'a' triple
+    (add-triple '(subject a foaf:Person) graph)
+    ;; Query for rdf:type should still find the 'a' triple
+    (let ((results (triples '($s rdf:type foaf:Person) graph)))
+      (should results)
+      (should (= 1 (length results)))
+      (should (equal (car results) '(subject rdf:type foaf:Person))))))
+
+(ert-deftest test-query-time-mixed-equivalence ()
+  "Test complex query mixing 'a' and 'rdf:type' triples."
+  (let ((graph (make-graph)))
+    ;; Add mixed triples
+    (add-triples '((alice a foaf:Person)
+                   (bob rdf:type foaf:Person)
+                   (charlie a foaf:Organization)) graph)
+    ;; Query for all foaf:Person using rdf:type should find both alice and bob
+    (let ((results (triples '($s rdf:type foaf:Person) graph)))
+      (should (= 2 (length results)))
+      ;; Results should contain both alice and bob (order may vary)
+      (should (member '(alice rdf:type foaf:Person) results))
+      (should (member '(bob rdf:type foaf:Person) results)))
+    ;; Query for all foaf:Person using 'a' should also find both alice and bob
+    (let ((results (triples '($s a foaf:Person) graph)))
+      (should (= 2 (length results)))
+      (should (member '(alice a foaf:Person) results))
+      (should (member '(bob a foaf:Person) results)))))
+
+(ert-deftest test-graph-query-with-a-rdf-type-equivalence ()
+  "Test that graph-query works with a/rdf:type equivalence."
+  (let ((graph (make-graph)))
+    ;; Add mixed data
+    (add-triples '((alice a foaf:Person)
+                   (bob rdf:type foaf:Person)
+                   (alice foaf:name "Alice")
+                   (bob foaf:name "Bob")) graph)
+    ;; Query using rdf:type should find both alice and bob
+    (let ((results (graph-query '(($s rdf:type foaf:Person) ($s foaf:name $name)) graph)))
+      (should (= 2 (length results)))
+      ;; Check that we got both names
+      (let ((names (mapcar (lambda (binding-set)
+                            (cdr (assoc '$name (car binding-set))))
+                          results)))
+        (should (member "Alice" names))
+        (should (member "Bob" names))))))
+
 (provide 'test-el-rdf)
 ;;; test-el-rdf.el ends here

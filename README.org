@@ -255,7 +255,7 @@ Installing with [[https://framagit.org/steckerhalter/quelpa][Quelpa]] is easy:
 
 ** 0.1.2-Alpha
 
-"a" and "rdf:type" are now both added ingestion-time
+"a" and "rdf:type" are treated equivalently at query-time
 
 
 ** 0.1.1-Alpha

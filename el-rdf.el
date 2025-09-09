@@ -181,7 +181,26 @@
         (expand-duals (gethash s (cdr (assoc 'spo graph))) s)
         )
        ((not (var-or-wild? p))
-        (expand-duals (gethash p (cdr (assoc 'pos graph))) p 'pos)
+        ;; Handle a/rdf:type equivalence when querying by predicate
+        (let ((results (expand-duals (gethash p (cdr (assoc 'pos graph))) p 'pos)))
+          (if (or (eq p 'a) (eq p 'rdf:type))
+              ;; Get triples for both 'a' and 'rdf:type' and combine them
+              (let* ((alt-p (if (eq p 'a) 'rdf:type 'a))
+                     (alt-results (expand-duals (gethash alt-p (cdr (assoc 'pos graph))) alt-p 'pos))
+                     ;; Transform alt-results to use the queried predicate and filter by object if specified
+                     (transformed-alt-results 
+                      (mapcar (lambda (triple)
+                               (list (nth 0 triple) p (nth 2 triple)))
+                             alt-results))
+                     ;; If object is specified (not variable/wildcard), filter both result sets
+                     (filtered-results (if (var-or-wild? o)
+                                         results
+                                         (cl-remove-if-not (lambda (triple) (equal (nth 2 triple) o)) results)))
+                     (filtered-alt-results (if (var-or-wild? o)
+                                             transformed-alt-results
+                                             (cl-remove-if-not (lambda (triple) (equal (nth 2 triple) o)) transformed-alt-results))))
+                (-uniq (append filtered-results filtered-alt-results)))
+            results))
         )
        ((not (var-or-wild? o))
         ; (princ (format "DEBUG triples: using OSP index for object %s\n" o))
@@ -291,13 +310,7 @@
 
   (defun add-triples (triplist graph)
     "Add multiple triples to the graph."
-    (mapc (lambda (x)
-	    (when (eq (nth 1 x) 'a)
-	      (add-triple `(,(nth 0 x) rdf:type ,(nth 2 x)) graph))
-    	    (when (eq (nth 1 x) 'rdf:type)
-	      (add-triple `(,(nth 0 x) a ,(nth 2 x)) graph))
-	    (add-triple x graph)
-	    ) triplist))
+    (mapc (lambda (x) (add-triple x graph)) triplist))
 
   (defun delete-triples (triplist graph)
     "Delete multiple triples from the graph."
