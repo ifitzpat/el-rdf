@@ -69,7 +69,7 @@
 
   (defun add-triple (triple graph)
     (let* ((newsub (nth 0 triple))
-  	 (newpred (nth 1 triple))
+  	 (newpred (if (eq (nth 1 triple) 'rdf:type) 'a (nth 1 triple))) ; Normalize rdf:type to 'a'
   	 (newobj (nth 2 triple))
   	 (spo (cdr (assoc 'spo graph)))
   	 (osp (cdr (assoc 'osp graph)))
@@ -93,7 +93,7 @@
     "Remove a triple from the graph, updating all three indices (SPO, OSP, POS).
     Automatically cleans up empty entries using remhash when no triples remain."
     (let* ((sub (nth 0 triple))
-  	 (pred (nth 1 triple))
+  	 (pred (if (eq (nth 1 triple) 'rdf:type) 'a (nth 1 triple))) ; Normalize rdf:type to 'a'
   	 (obj (nth 2 triple))
   	 (spo (cdr (assoc 'spo graph)))
   	 (osp (cdr (assoc 'osp graph)))
@@ -170,6 +170,13 @@
       results))
 
 
+(defun transform-a-results-to-rdf-type (triples)
+(let ((transformed-results
+                     (mapcar (lambda (triple)
+                              (list (nth 0 triple) 'rdf:type (nth 2 triple)))
+                            triples)))
+		transformed-results))
+
   (defun triples (pattern graph) ;; doesn't do pattern matching just retrieves the right index
     (let ((s (nth 0 pattern))
   	(p (nth 1 pattern))
@@ -178,34 +185,30 @@
       (cond
        ((not (var-or-wild? s))
         ; (princ (format "DEBUG triples: using SPO index for subject %s\n" s))
-        (expand-duals (gethash s (cdr (assoc 'spo graph))) s)
+	(let ((results (expand-duals (gethash s (cdr (assoc 'spo graph))) s)))
+	  (if (eq p 'rdf:type)
+(transform-a-results-to-rdf-type results)
+	   results   )
+
+	  )
         )
        ((not (var-or-wild? p))
         ;; Handle a/rdf:type equivalence when querying by predicate
-        (let ((results (expand-duals (gethash p (cdr (assoc 'pos graph))) p 'pos)))
-          (if (or (eq p 'a) (eq p 'rdf:type))
-              ;; Get triples for both 'a' and 'rdf:type' and combine them
-              (let* ((alt-p (if (eq p 'a) 'rdf:type 'a))
-                     (alt-results (expand-duals (gethash alt-p (cdr (assoc 'pos graph))) alt-p 'pos))
-                     ;; Transform alt-results to use the queried predicate and filter by object if specified
-                     (transformed-alt-results 
-                      (mapcar (lambda (triple)
-                               (list (nth 0 triple) p (nth 2 triple)))
-                             alt-results))
-                     ;; If object is specified (not variable/wildcard), filter both result sets
-                     (filtered-results (if (var-or-wild? o)
-                                         results
-                                         (cl-remove-if-not (lambda (triple) (equal (nth 2 triple) o)) results)))
-                     (filtered-alt-results (if (var-or-wild? o)
-                                             transformed-alt-results
-                                             (cl-remove-if-not (lambda (triple) (equal (nth 2 triple) o)) transformed-alt-results))))
-                (-uniq (append filtered-results filtered-alt-results)))
-            results))
-        )
+        (if (eq p 'rdf:type)
+            ;; Query for rdf:type but only 'a' exists in storage, so look up 'a' and transform results
+            (let ((a-results (expand-duals (gethash 'a (cdr (assoc 'pos graph))) 'a 'pos)))
+              ;; Transform to rdf:type and filter by object if specified
+	      (transform-a-results-to-rdf-type a-results))
+          ;; Normal predicate lookup
+	  (expand-duals (gethash p (cdr (assoc 'pos graph))) p 'pos)))
        ((not (var-or-wild? o))
         ; (princ (format "DEBUG triples: using OSP index for object %s\n" o))
-        (expand-duals (gethash o (cdr (assoc 'osp graph))) o 'osp)
-        )
+	(let ((results (expand-duals (gethash o (cdr (assoc 'osp graph))) o 'osp)))
+	  (if (eq p 'rdf:type)
+(transform-a-results-to-rdf-type results)
+	      results)
+
+	  ))
        (t
         ; (princ "DEBUG triples: using universal pattern - all triples\n")
         (apply #'append
@@ -269,6 +272,19 @@
     (if (optional-clause? clause)
         (cadr clause)
       clause))
+
+  (defun normalize-pattern (pattern)
+    "Normalize rdf:type to 'a' in a pattern for consistent matching.
+     Only normalize if the pattern contains NO variables, since triples()
+     already handles equivalence by transforming results."
+    (if (and (listp pattern)
+             (>= (length pattern) 3)
+             (eq (nth 1 pattern) 'rdf:type)
+             ;; Only normalize if ALL parts are concrete (no variables anywhere)
+             (not (var-or-wild? (nth 0 pattern)))
+             (not (var-or-wild? (nth 2 pattern))))
+        (list (nth 0 pattern) 'a (nth 2 pattern))
+      pattern))
 
 
 (defun augmented-eq (pattern input)
@@ -438,7 +454,10 @@ EXECUTION PATHS:
       (cond ((or (not clauses) (< (length unwrapped-pattern) 3)) ; we're at the end of the list of clauses
   	   bindings)
   	  ((not bindings) ; this is the first invocation
-  	   (let ((bindings (traverse-graph unwrapped-pattern (triples unwrapped-pattern graph))))
+  	   (let ((bindings (traverse-graph
+			    ;(normalize-pattern unwrapped-pattern)
+			    unwrapped-pattern
+			    (triples unwrapped-pattern graph))))
   	     (when el-rdf-debug
   	       (princ "first call\n"))
   	     (if (and (not bindings) (not is-optional))
@@ -454,7 +473,8 @@ EXECUTION PATHS:
   	    (lambda (binding-branch)
   	      (let*
   		  ((newbindings (traverse-graph
-  				 (cl-sublis binding-branch unwrapped-pattern)
+  				 ;(normalize-pattern (cl-sublis binding-branch unwrapped-pattern))
+				 (cl-sublis binding-branch unwrapped-pattern)
   				 (triples unwrapped-pattern graph)))
   		   (updated-bindings (update-bindings newbindings (list binding-branch)))
   					;(newbindings (mapcar (lambda (y) (-remove (lambda (x) (eq t (car x))) y)) newbindings))
@@ -483,7 +503,9 @@ EXECUTION PATHS:
   	  ;; SINGLE BINDING BRANCH: Apply pattern to current bindings
 	  (t
   	   (let* ((newbindings
-  		   (traverse-graph (cl-sublis bindings unwrapped-pattern)
+  		   (traverse-graph
+		    ;(normalize-pattern (cl-sublis bindings unwrapped-pattern))
+		    (cl-sublis bindings unwrapped-pattern)
   				   (triples unwrapped-pattern graph)))
    		  (updated-bindings (update-bindings newbindings bindings)))
   	     (if (or (not newbindings)(not updated-bindings) )
