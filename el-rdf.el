@@ -4,7 +4,7 @@
 
 ;; Author: Ian FitzPatrick ian@ianfitzpatrick.eu
 ;; URL: codeberg.org/ifitzpat/el-rdf
-;; Version: 0.1.1
+;; Version: 0.1.2
 ;; Package-Requires: ((emacs "27.1")(request)(dash "20250312.1307"))
 ;; Keywords: rdf triple-store
 
@@ -291,7 +291,13 @@
 
   (defun add-triples (triplist graph)
     "Add multiple triples to the graph."
-    (mapc (lambda (x) (add-triple x graph)) triplist))
+    (mapc (lambda (x)
+	    (when (eq (nth 1 x) 'a)
+	      (add-triple `((nth 0 x) rdf:type (nth 2 x))))
+    	    (when (eq (nth 1 x) 'rdf:type)
+	      (add-triple `((nth 0 x) a (nth 2 x))))
+	    (add-triple x graph)
+	    ) triplist))
 
   (defun delete-triples (triplist graph)
     "Delete multiple triples from the graph."
@@ -474,7 +480,7 @@ EXECUTION PATHS:
 		   nil) 	   ; if nil then return nil
   	       (let ((result (graph-query (cl-sublis updated-bindings (cdr clauses)) graph updated-bindings)))
   		 ;; For single-branch queries, ensure result has same structure as single-clause queries
-  		 ;; Single-clause queries return: (((bindings))) 
+  		 ;; Single-clause queries return: (((bindings)))
   		 ;; But single-branch multi-clause can return: ((bindings))
   		 ;; Check if result needs one more level of wrapping
   		 (if (and result
