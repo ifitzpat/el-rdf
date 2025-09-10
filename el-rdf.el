@@ -477,7 +477,8 @@ EXECUTION PATHS:
   		 (if bindings (mapcar #'list bindings) '())))))
   	  ;; MULTIPLE BINDING BRANCHES: Split execution per branch, combine results
 	  ((> (length bindings) 1)
-  	   (mapcar
+  	   (-remove #'null
+  	    (mapcar
   	    (lambda (binding-branch)
   	      (let*
   		  ((newbindings (traverse-graph
@@ -505,7 +506,7 @@ EXECUTION PATHS:
   		  )
   		)
   	      )
-  	    bindings)
+  	    bindings))
 
   	   )
   	  ;; SINGLE BINDING BRANCH: Apply pattern to current bindings
