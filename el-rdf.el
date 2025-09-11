@@ -141,24 +141,30 @@
   (defun namespace (x)
     (car (split-string (symbol-name x) ":")))
 
+  (defun expand-duals-pos (duals element)
+    "Helper for POS reorder: (obj element pred)"
+    (mapcan (lambda (x)
+              (mapcar (lambda (y) (list y element (car x))) (cdr x)))
+            duals))
+
+  (defun expand-duals-osp (duals element)
+    "Helper for OSP reorder: (pred obj element)"
+    (mapcan (lambda (x)
+              (mapcar (lambda (y) (list (car x) y element)) (cdr x)))
+            duals))
+
+  (defun expand-duals-default (duals element)
+    "Helper for default order: (element pred obj)"
+    (mapcan (lambda (x)
+              (mapcar (lambda (y) (list element (car x) y)) (cdr x)))
+            duals))
+
   (defun expand-duals (duals element &optional reorder)
     ;;  ((baz:bak foo:quix) (foo:bar foo:quix foo:baz) (a frob:niz schema:thing))
-    (let ((reorder-val reorder)
-          (element-val element))
-      (if (eq reorder-val 'pos)
-          (mapcan
-           (lambda (x)
-             (mapcar (lambda (y) (list y element-val (car x))) (cdr x)))
-           duals)
-        (if (eq reorder-val 'osp)
-            (mapcan
-             (lambda (x)
-               (mapcar (lambda (y) (list (car x) y element-val)) (cdr x)))
-             duals)
-          (mapcan
-           (lambda (x)
-             (mapcar (lambda (y) (list element-val (car x) y)) (cdr x)))
-           duals)))))
+    (cond
+     ((eq reorder 'pos) (expand-duals-pos duals element))
+     ((eq reorder 'osp) (expand-duals-osp duals element))
+     (t (expand-duals-default duals element))))
 
 
   ;; From ht.el -- Author: Wilfred Hughes <me@wilfred.me.uk>
