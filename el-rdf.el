@@ -214,10 +214,26 @@
 	  ))
        (t
         ; (princ "DEBUG triples: using universal pattern - all triples\n")
-        (apply #'append
-               (ht-map (lambda (key value)
-                        (expand-duals value key))
-                      (cdr (assoc 'spo graph)))))
+        (let ((result '())
+              (spo-table (cdr (assoc 'spo graph))))
+          ;; Use hash-table-keys if available, otherwise extract keys without closures
+          (if (fboundp 'hash-table-keys)
+              (dolist (key (hash-table-keys spo-table))
+                (let ((value (gethash key spo-table)))
+                  (setq result (append (expand-duals value key) result))))
+            ;; Fallback: extract keys without closures using temporary variables
+            (let ((all-keys '())
+                  (temp-key nil)
+                  (temp-value nil))
+              (maphash (lambda (k v) 
+                         (setq temp-key k)
+                         (setq temp-value v)
+                         (push temp-key all-keys)) 
+                       spo-table)
+              (dolist (key all-keys)
+                (let ((value (gethash key spo-table)))
+                  (setq result (append (expand-duals value key) result))))))
+          result))
        )))
 
 (defun triples-to-string (trips)
