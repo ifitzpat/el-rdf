@@ -201,27 +201,37 @@
     (car (split-string (symbol-name x) ":")))
 
   (defun expand-duals (duals element &optional reorder)
-    "Expand duals structure into triples. Uses dynamic binding to avoid lexical closure issues."
-    ;; Temporarily use dynamic binding to avoid closure macro expansion recursion
-    (let* ((lexical-binding nil)  ; Force dynamic binding for this function
-           (result '()))
-      ;; Simple iterative approach without complex nesting
-      (while duals
-        (let* ((dual (car duals))
-               (key (car dual))
-               (values (cdr dual)))
-          (while values
-            (let ((value (car values)))
-              (cond
-               ((eq reorder 'pos)
-                (setq result (cons (list value element key) result)))
-               ((eq reorder 'osp)  
-                (setq result (cons (list key value element) result)))
-               (t
-                (setq result (cons (list element key value) result))))
-              (setq values (cdr values))))
-          (setq duals (cdr duals))))
-      (nreverse result)))
+    "Expand duals structure into triples with batched processing to avoid recursion limits."
+    (if (not duals)
+        '()
+      (let ((result '())
+            (value-batch-size 100))  ; Process values in batches to avoid deep recursion
+        (while duals
+          (let* ((dual (car duals))
+                 (key (car dual))
+                 (values (cdr dual))
+                 (processed-values 0))
+            ;; Process values in batches
+            (while values
+              (let ((batch-end (min value-batch-size (length values)))
+                    (current-batch 0))
+                (while (and values (< current-batch batch-end))
+                  (let ((value (car values)))
+                    (cond
+                     ((eq reorder 'pos)
+                      (setq result (cons (list value element key) result)))
+                     ((eq reorder 'osp)  
+                      (setq result (cons (list key value element) result)))
+                     (t
+                      (setq result (cons (list element key value) result))))
+                    (setq values (cdr values))
+                    (setq current-batch (1+ current-batch))
+                    (setq processed-values (1+ processed-values))))
+                ;; Yield control after each batch to prevent recursion buildup
+                (when values
+                  (sit-for 0.001))))
+            (setq duals (cdr duals))))
+        (nreverse result))))
 
 
   ;; From ht.el -- Author: Wilfred Hughes <me@wilfred.me.uk>
