@@ -148,10 +148,10 @@
       ; (if (listp (cdr x))
 	   (mapcar (lambda (y)
   	       (cond
-  		((and 'reorder (eq reorder 'pos))
+  		((and reorder (eq reorder 'pos))
   		 (list  y element (car x))
   		 )
-  		((and 'reorder (eq reorder 'osp))
+  		((and reorder (eq reorder 'osp))
   		 (list (car x) y element)
   		 )
   		(t
