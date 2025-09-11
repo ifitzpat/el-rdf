@@ -142,20 +142,26 @@
     (car (split-string (symbol-name x) ":")))
 
   (defun expand-duals (duals element &optional reorder)
-    ;;  ((baz:bak foo:quix) (foo:bar foo:quix foo:baz) (a frob:niz schema:thing))
-    ;; Use explicit loops instead of closures to avoid macro expansion issues
-    (let ((result '()))
-      (dolist (dual duals)
-        (let ((key (car dual))
-              (values (cdr dual)))
-          (dolist (value values)
-            (cond
-             ((eq reorder 'pos)
-              (push (list value element key) result))
-             ((eq reorder 'osp)  
-              (push (list key value element) result))
-             (t
-              (push (list element key value) result))))))
+    "Expand duals structure into triples. Uses dynamic binding to avoid lexical closure issues."
+    ;; Temporarily use dynamic binding to avoid closure macro expansion recursion
+    (let* ((lexical-binding nil)  ; Force dynamic binding for this function
+           (result '()))
+      ;; Simple iterative approach without complex nesting
+      (while duals
+        (let* ((dual (car duals))
+               (key (car dual))
+               (values (cdr dual)))
+          (while values
+            (let ((value (car values)))
+              (cond
+               ((eq reorder 'pos)
+                (setq result (cons (list value element key) result)))
+               ((eq reorder 'osp)  
+                (setq result (cons (list key value element) result)))
+               (t
+                (setq result (cons (list element key value) result))))
+              (setq values (cdr values))))
+          (setq duals (cdr duals))))
       (nreverse result)))
 
 
