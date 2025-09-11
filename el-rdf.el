@@ -141,30 +141,22 @@
   (defun namespace (x)
     (car (split-string (symbol-name x) ":")))
 
-  (defun expand-duals-pos (duals element)
-    "Helper for POS reorder: (obj element pred)"
-    (mapcan (lambda (x)
-              (mapcar (lambda (y) (list y element (car x))) (cdr x)))
-            duals))
-
-  (defun expand-duals-osp (duals element)
-    "Helper for OSP reorder: (pred obj element)"
-    (mapcan (lambda (x)
-              (mapcar (lambda (y) (list (car x) y element)) (cdr x)))
-            duals))
-
-  (defun expand-duals-default (duals element)
-    "Helper for default order: (element pred obj)"
-    (mapcan (lambda (x)
-              (mapcar (lambda (y) (list element (car x) y)) (cdr x)))
-            duals))
-
   (defun expand-duals (duals element &optional reorder)
     ;;  ((baz:bak foo:quix) (foo:bar foo:quix foo:baz) (a frob:niz schema:thing))
-    (cond
-     ((eq reorder 'pos) (expand-duals-pos duals element))
-     ((eq reorder 'osp) (expand-duals-osp duals element))
-     (t (expand-duals-default duals element))))
+    ;; Use explicit loops instead of closures to avoid macro expansion issues
+    (let ((result '()))
+      (dolist (dual duals)
+        (let ((key (car dual))
+              (values (cdr dual)))
+          (dolist (value values)
+            (cond
+             ((eq reorder 'pos)
+              (push (list value element key) result))
+             ((eq reorder 'osp)  
+              (push (list key value element) result))
+             (t
+              (push (list element key value) result))))))
+      (nreverse result)))
 
 
   ;; From ht.el -- Author: Wilfred Hughes <me@wilfred.me.uk>
