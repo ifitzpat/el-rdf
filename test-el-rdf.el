@@ -1,3 +1,7 @@
+(require 'package)
+(add-to-list 'package-archives '("melpa" . "https://melpa.org/packages/"))
+(package-initialize)
+
 (require 'ert)
 (load-file "el-rdf.el")
 (require 'el-rdf)
@@ -487,6 +491,142 @@
                           results)))
         (should (member "Alice" names))
         (should (member "Bob" names))))))
+
+;; Content Reference System Tests
+
+(ert-deftest test-content-reference-large-content ()
+  "Test that large content is stored as file reference and transparently retrieved"
+  (let ((test-graph (make-graph))
+        ;; Set threshold very low for testing
+        (el-rdf-max-string-length 50)
+        ;; Create large content that exceeds threshold
+        (large-content (make-string 100 ?x)))
+
+    ;; Add triple with large content
+    (add-triple `(_:test rdfs:label ,large-content) test-graph)
+
+    ;; Query back - should transparently resolve content reference
+    (let ((retrieved-triples (triples '(_:test rdfs:label t) test-graph)))
+      (should (= 1 (length retrieved-triples)))
+      (let ((retrieved-content (nth 2 (car retrieved-triples))))
+        (should (= (length large-content) (length retrieved-content)))
+        (should (string= large-content retrieved-content))))))
+
+(ert-deftest test-content-reference-small-content ()
+  "Test that small content is NOT stored as file reference"
+  (let ((test-graph (make-graph))
+        ;; Set threshold higher than our test content
+        (el-rdf-max-string-length 50)
+        ;; Create small content under threshold
+        (small-content "small"))
+
+    ;; Add triple with small content
+    (add-triple `(_:test2 rdfs:label ,small-content) test-graph)
+
+    ;; Query back - should be stored and retrieved directly
+    (let ((retrieved-triples (triples '(_:test2 rdfs:label t) test-graph)))
+      (should (= 1 (length retrieved-triples)))
+      (let ((retrieved-content (nth 2 (car retrieved-triples))))
+        (should (string= small-content retrieved-content))))))
+
+(ert-deftest test-content-reference-graph-query ()
+  "Test that graph-query also resolves content references transparently"
+  (let ((test-graph (make-graph))
+        (el-rdf-max-string-length 30)
+        (large-content (make-string 60 ?y)))
+
+    ;; Add triple with large content
+    (add-triple `(_:test rdfs:label ,large-content) test-graph)
+
+    ;; Query using graph-query
+    (let ((query-result (graph-query '((_:test rdfs:label $content)) test-graph)))
+      (should (= 1 (length query-result)))
+      (let* ((binding-branch (caar query-result))
+             (content-binding (assoc '$content binding-branch))
+             (resolved-content (cdr content-binding)))
+        (should content-binding)
+        (should (= (length large-content) (length resolved-content)))
+        (should (string= large-content resolved-content))))))
+
+(ert-deftest test-content-reference-disabled ()
+  "Test that content reference system can be disabled"
+  (let ((test-graph (make-graph))
+        ;; Disable content reference system
+        (el-rdf-max-string-length nil)
+        (large-content (make-string 1000 ?z)))
+
+    ;; Add triple with large content - should be stored directly
+    (add-triple `(_:test rdfs:label ,large-content) test-graph)
+
+    ;; Query back - should retrieve the same large content
+    (let ((retrieved-triples (triples '(_:test rdfs:label t) test-graph)))
+      (should (= 1 (length retrieved-triples)))
+      (let ((retrieved-content (nth 2 (car retrieved-triples))))
+        (should (= (length large-content) (length retrieved-content)))
+        (should (string= large-content retrieved-content))))))
+
+(ert-deftest test-content-reference-threshold-boundary ()
+  "Test content reference behavior at the exact threshold boundary"
+  (let ((test-graph (make-graph))
+        (el-rdf-max-string-length 50))
+
+    ;; Test content exactly at threshold (should NOT be stored as reference)
+    (let ((exact-content (make-string 50 ?a)))
+      (add-triple `(_:exact rdfs:label ,exact-content) test-graph)
+      (let ((retrieved (nth 2 (car (triples '(_:exact rdfs:label t) test-graph)))))
+        (should (string= exact-content retrieved))))
+
+    ;; Test content one character over threshold (SHOULD be stored as reference)
+    (let ((over-content (make-string 51 ?b)))
+      (add-triple `(_:over rdfs:label ,over-content) test-graph)
+      (let ((retrieved (nth 2 (car (triples '(_:over rdfs:label t) test-graph)))))
+        (should (string= over-content retrieved))))))
+
+(ert-deftest test-content-reference-multiple-large-objects ()
+  "Test multiple large content objects are handled independently"
+  (let ((test-graph (make-graph))
+        (el-rdf-max-string-length 40)
+        (content1 (make-string 80 ?1))
+        (content2 (make-string 90 ?2))
+        (content3 (make-string 100 ?3)))
+
+    ;; Add multiple triples with large content
+    (add-triples `((_:test1 rdfs:label ,content1)
+                   (_:test2 rdfs:comment ,content2)
+                   (_:test3 rdfs:description ,content3)) test-graph)
+
+    ;; Query all back
+    (let ((results1 (triples '(_:test1 rdfs:label t) test-graph))
+          (results2 (triples '(_:test2 rdfs:comment t) test-graph))
+          (results3 (triples '(_:test3 rdfs:description t) test-graph)))
+
+      (should (= 1 (length results1)))
+      (should (= 1 (length results2)))
+      (should (= 1 (length results3)))
+
+      ;; Verify each content is correctly retrieved
+      (should (string= content1 (nth 2 (car results1))))
+      (should (string= content2 (nth 2 (car results2))))
+      (should (string= content3 (nth 2 (car results3)))))))
+
+(ert-deftest test-content-reference-with-construct ()
+  "Test that CONSTRUCT queries also resolve content references"
+  (let ((test-graph (make-graph))
+        (el-rdf-max-string-length 25)
+        (large-content (make-string 50 ?c)))
+
+    ;; Add data
+    (add-triples `((_:person rdf:type foaf:Person)
+                   (_:person rdfs:comment ,large-content)) test-graph)
+
+    ;; Use construct to create new triples
+    (let* ((query-result (graph-query '((_:person rdf:type foaf:Person)
+                                       (_:person rdfs:comment $comment)) test-graph))
+           (constructed (construct '((_:person foaf:description $comment)) query-result)))
+      (should (= 1 (length constructed)))
+      (let ((constructed-triple (car constructed)))
+        ;; The constructed triple should have resolved content
+        (should (string= large-content (nth 2 constructed-triple)))))))
 
 (provide 'test-el-rdf)
 ;;; test-el-rdf.el ends here

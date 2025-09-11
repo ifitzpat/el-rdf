@@ -30,9 +30,68 @@
 ;;; Code:
 (require 'dash)
 (require 'cl-seq)
+(require 'uuidgen)
+
+;; Increase macro expansion limits to handle large datasets
+(setq max-lisp-eval-depth 5000)
+(setq max-specpdl-size 10000)
+;; Also increase macro expansion limits
+(setq max-macroexpand-depth 5000)
+(setq lisp-eval-depth-limit 5000)
 
 (defvar el-rdf-debug nil
   "When non-nil, enable debug output for el-rdf operations.")
+
+(defvar el-rdf-max-string-length 1000
+  "Maximum string length before content is stored as file reference. Set to nil to disable.")
+
+(defun el-rdf--get-cache-dir ()
+  "Get the cache directory for el-rdf, creating it if necessary."
+  (let ((cache-dir (or (getenv "XDG_CACHE_HOME")
+                       (expand-file-name ".cache" (getenv "HOME")))))
+    (let ((el-rdf-cache-dir (expand-file-name "el-rdf" cache-dir)))
+      (unless (file-directory-p el-rdf-cache-dir)
+        (make-directory el-rdf-cache-dir t))
+      el-rdf-cache-dir)))
+
+(defun el-rdf--content-reference-p (obj)
+  "Return t if OBJ is a file content reference."
+  (and (stringp obj) (string-prefix-p "file:" obj)))
+
+(defun el-rdf--store-large-content (content)
+  "Store large CONTENT to cache file and return reference string."
+  (when (and el-rdf-max-string-length
+             (stringp content)
+             (> (length content) el-rdf-max-string-length))
+    (let* ((uuid (uuidgen-1))
+           (filename (format "content-%s.txt" uuid))
+           (filepath (expand-file-name filename (el-rdf--get-cache-dir)))
+           (reference (format "file:%s" filename)))
+      (with-temp-file filepath
+        (insert content))
+      reference)))
+
+(defun el-rdf--resolve-content-reference (reference)
+  "Resolve a file REFERENCE back to its original content."
+  (if (el-rdf--content-reference-p reference)
+      (let* ((filename (substring reference 5)) ; Remove "file:" prefix
+             (filepath (expand-file-name filename (el-rdf--get-cache-dir))))
+        (if (file-exists-p filepath)
+            (with-temp-buffer
+              (insert-file-contents filepath)
+              (buffer-string))
+          ;; File doesn't exist - return the reference as-is for graceful degradation
+          reference))
+    reference))
+
+(defun el-rdf--process-triple-object (obj)
+  "Process triple object, storing large content as reference if needed."
+  (let ((stored-ref (el-rdf--store-large-content obj)))
+    (or stored-ref obj)))
+
+(defun el-rdf--resolve-triple-object (obj)
+  "Resolve triple object, loading content from reference if needed."
+  (el-rdf--resolve-content-reference obj))
 
 (defun make-graph ()
 `((spo . ,(make-hash-table :test 'eq))
@@ -73,7 +132,7 @@
   (defun add-triple (triple graph)
     (let* ((newsub (nth 0 triple))
   	 (newpred (if (eq (nth 1 triple) 'rdf:type) 'a (nth 1 triple))) ; Normalize rdf:type to 'a'
-  	 (newobj (nth 2 triple))
+  	 (newobj (el-rdf--process-triple-object (nth 2 triple))) ; Store large content as reference
 	 ;(for-debug (princ (format "\n\nadding %s %s %s\n\n" newsub newpred newobj)))
   	 (spo (cdr (assoc 'spo graph)))
   	 (osp (cdr (assoc 'osp graph)))
@@ -176,6 +235,14 @@
        table)
       results))
 
+(defun el-rdf--resolve-triple-objects (triples)
+  "Resolve content references in TRIPLES objects, returning triples with resolved content."
+  (mapcar (lambda (triple)
+            (list (nth 0 triple)
+                  (nth 1 triple)
+                  (el-rdf--resolve-content-reference (nth 2 triple))))
+          triples))
+
 
 (defun transform-a-results-to-rdf-type (triples)
 (let ((transformed-results
@@ -191,56 +258,53 @@
   	(p (nth 1 pattern))
   	(o (nth 2 pattern)))
       ; (princ (format "DEBUG triples: pattern=%s, s=%s p=%s o=%s\n" pattern s p o))
-      (cond
-       ((not (var-or-wild? s))
-        ; (princ (format "DEBUG triples: using SPO index for subject %s\n" s))
-	(let ((results (expand-duals (gethash s (cdr (assoc 'spo graph))) s)))
-	  (if (eq p 'rdf:type)
-(transform-a-results-to-rdf-type results)
-	   results   )
-
-	  )
-        )
-       ((not (var-or-wild? p))
-        ;; Handle a/rdf:type equivalence when querying by predicate
-        (if (eq p 'rdf:type)
-            ;; Query for rdf:type but only 'a' exists in storage, so look up 'a' and transform results
-            (let ((a-results (expand-duals (gethash 'a (cdr (assoc 'pos graph))) 'a 'pos)))
-              ;; Transform to rdf:type and filter by object if specified
-	      (transform-a-results-to-rdf-type a-results))
-          ;; Normal predicate lookup
-	  (expand-duals (gethash p (cdr (assoc 'pos graph))) p 'pos)))
-       ((not (var-or-wild? o))
-        ; (princ (format "DEBUG triples: using OSP index for object %s\n" o))
-	(let ((results (expand-duals (gethash o (cdr (assoc 'osp graph))) o 'osp)))
-	  (if (eq p 'rdf:type)
-(transform-a-results-to-rdf-type results)
-	      results)
-
-	  ))
-       (t
-        ; (princ "DEBUG triples: using universal pattern - all triples\n")
-        (let ((result '())
-              (spo-table (cdr (assoc 'spo graph))))
-          ;; Use hash-table-keys if available, otherwise extract keys without closures
-          (if (fboundp 'hash-table-keys)
-              (dolist (key (hash-table-keys spo-table))
-                (let ((value (gethash key spo-table)))
-                  (setq result (append (expand-duals value key) result))))
-            ;; Fallback: extract keys without closures using temporary variables
-            (let ((all-keys '())
-                  (temp-key nil)
-                  (temp-value nil))
-              (maphash (lambda (k v) 
-                         (setq temp-key k)
-                         (setq temp-value v)
-                         (push temp-key all-keys)) 
-                       spo-table)
-              (dolist (key all-keys)
-                (let ((value (gethash key spo-table)))
-                  (setq result (append (expand-duals value key) result))))))
-          result))
-       )))
+      (let ((raw-results 
+             (cond
+              ((not (var-or-wild? s))
+               ; (princ (format "DEBUG triples: using SPO index for subject %s\n" s))
+	       (let ((results (expand-duals (gethash s (cdr (assoc 'spo graph))) s)))
+	         (if (eq p 'rdf:type)
+                     (transform-a-results-to-rdf-type results)
+	           results)))
+              ((not (var-or-wild? p))
+               ;; Handle a/rdf:type equivalence when querying by predicate
+               (if (eq p 'rdf:type)
+                   ;; Query for rdf:type but only 'a' exists in storage, so look up 'a' and transform results
+                   (let ((a-results (expand-duals (gethash 'a (cdr (assoc 'pos graph))) 'a 'pos)))
+                     ;; Transform to rdf:type and filter by object if specified
+	             (transform-a-results-to-rdf-type a-results))
+                 ;; Normal predicate lookup
+	         (expand-duals (gethash p (cdr (assoc 'pos graph))) p 'pos)))
+              ((not (var-or-wild? o))
+               ; (princ (format "DEBUG triples: using OSP index for object %s\n" o))
+	       (let ((results (expand-duals (gethash o (cdr (assoc 'osp graph))) o 'osp)))
+	         (if (eq p 'rdf:type)
+                     (transform-a-results-to-rdf-type results)
+	           results)))
+              (t
+               ; (princ "DEBUG triples: using universal pattern - all triples\n")
+               (let ((result '())
+                     (spo-table (cdr (assoc 'spo graph))))
+                 ;; Use hash-table-keys if available, otherwise extract keys without closures
+                 (if (fboundp 'hash-table-keys)
+                     (dolist (key (hash-table-keys spo-table))
+                       (let ((value (gethash key spo-table)))
+                         (setq result (append (expand-duals value key) result))))
+                   ;; Fallback: extract keys without closures using temporary variables
+                   (let ((all-keys '())
+                         (temp-key nil)
+                         (temp-value nil))
+                     (maphash (lambda (k v) 
+                                (setq temp-key k)
+                                (setq temp-value v)
+                                (push temp-key all-keys)) 
+                              spo-table)
+                     (dolist (key all-keys)
+                       (let ((value (gethash key spo-table)))
+                         (setq result (append (expand-duals value key) result))))))
+                 result)))))
+        ;; Resolve content references in all returned triples
+        (el-rdf--resolve-triple-objects raw-results))))
 
 (defun triples-to-string (trips)
   "Convert a list of TRIPS to string while preserving nil values and empty strings."
