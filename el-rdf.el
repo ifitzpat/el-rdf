@@ -284,12 +284,23 @@
               (t
                ; (princ "DEBUG triples: using universal pattern - all triples\n")
                (let ((result '())
-                     (spo-table (cdr (assoc 'spo graph))))
+                     (spo-table (cdr (assoc 'spo graph)))
+                     (batch-size 50)  ; Process subjects in batches to avoid deep recursion
+                     (processed-count 0))
                  ;; Use hash-table-keys if available, otherwise extract keys without closures
                  (if (fboundp 'hash-table-keys)
-                     (dolist (key (hash-table-keys spo-table))
-                       (let ((value (gethash key spo-table)))
-                         (setq result (append (expand-duals value key) result))))
+                     (let ((all-keys (hash-table-keys spo-table)))
+                       (while all-keys
+                         (let ((batch-keys (cl-subseq all-keys 0 (min batch-size (length all-keys)))))
+                           (dolist (key batch-keys)
+                             (let ((value (gethash key spo-table)))
+                               (setq result (append (expand-duals value key) result))
+                               (setq processed-count (1+ processed-count))))
+                           ;; Remove processed keys from the list
+                           (setq all-keys (nthcdr (min batch-size (length all-keys)) all-keys))
+                           ;; Yield control every batch to prevent deep recursion buildup
+                           (when all-keys
+                             (sit-for 0.001)))))
                    ;; Fallback: extract keys without closures using temporary variables
                    (let ((all-keys '())
                          (temp-key nil)
@@ -299,9 +310,17 @@
                                 (setq temp-value v)
                                 (push temp-key all-keys)) 
                               spo-table)
-                     (dolist (key all-keys)
-                       (let ((value (gethash key spo-table)))
-                         (setq result (append (expand-duals value key) result))))))
+                     (while all-keys
+                       (let ((batch-keys (cl-subseq all-keys 0 (min batch-size (length all-keys)))))
+                         (dolist (key batch-keys)
+                           (let ((value (gethash key spo-table)))
+                             (setq result (append (expand-duals value key) result))
+                             (setq processed-count (1+ processed-count))))
+                         ;; Remove processed keys from the list
+                         (setq all-keys (nthcdr (min batch-size (length all-keys)) all-keys))
+                         ;; Yield control every batch to prevent deep recursion buildup
+                         (when all-keys
+                           (sit-for 0.001))))))
                  result)))))
         ;; Resolve content references in all returned triples
         (el-rdf--resolve-triple-objects raw-results))))
