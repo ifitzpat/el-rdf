@@ -143,25 +143,20 @@
 
   (defun expand-duals (duals element &optional reorder)
     ;;  ((baz:bak foo:quix) (foo:bar foo:quix foo:baz) (a frob:niz schema:thing))
-    (mapcan
-     (lambda (x)
-      ; (if (listp (cdr x))
-	   (mapcar (lambda (y)
-  	       (cond
-  		((and reorder (eq reorder 'pos))
-  		 (list  y element (car x))
-  		 )
-  		((and reorder (eq reorder 'osp))
-  		 (list (car x) y element)
-  		 )
-  		(t
-                   (list element (car x) y))
-  		)
-  	       ) (cdr x))
-	 ;(list element (car x) (cdr x))
-	; )
-       ) duals)
-    )
+    (if (eq reorder 'pos)
+        (mapcan
+         (lambda (x)
+           (mapcar (lambda (y) (list y element (car x))) (cdr x)))
+         duals)
+      (if (eq reorder 'osp)
+          (mapcan
+           (lambda (x)
+             (mapcar (lambda (y) (list (car x) y element)) (cdr x)))
+           duals)
+        (mapcan
+         (lambda (x)
+           (mapcar (lambda (y) (list element (car x) y)) (cdr x)))
+         duals))))
 
 
   ;; From ht.el -- Author: Wilfred Hughes <me@wilfred.me.uk>
