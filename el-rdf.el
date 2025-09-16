@@ -676,11 +676,32 @@ EXECUTION PATHS:
 
 ;; TODO refactor this so that where is a function
 (defun select (binding-list where)
-  (mapcan (lambda (r)
-	    (if (symbolp (car r)) ; not a nested list
-		(list r)
-		r))
-          (mapcar (lambda (r) (bindings-from-row binding-list r)) where)))
+  "Execute a SELECT query with SPARQL semantics for failed matches.
+BINDING-LIST is the list of variables to select.
+WHERE should be the result of (graph-query clauses graph), but if the entire 
+WHERE clause fails to match, return nil values for all bindings."
+  (if where
+      (mapcan (lambda (r)
+                (if (symbolp (car r)) ; not a nested list
+                    (list r)
+                  r))
+              (mapcar (lambda (r) (bindings-from-row binding-list r)) where))
+    ;; Return nil for all requested variables when WHERE is empty/nil
+    (list (mapcar (lambda (var) nil) binding-list))))
+
+(defun select-safe (binding-list clauses graph)
+  "Execute a SELECT query that gracefully handles failed WHERE clauses.
+BINDING-LIST is the list of variables to select.
+CLAUSES is the list of query patterns.
+GRAPH is the RDF graph to query.
+
+This function implements SPARQL SELECT semantics: if the WHERE clause fails
+to match entirely, return nil bindings for all requested variables instead
+of throwing an error."
+  (let ((where-result (condition-case nil
+                          (graph-query clauses graph)
+                        (error nil))))
+    (select binding-list where-result)))
 
 
       ;; I want to return a list of triples
