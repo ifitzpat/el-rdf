@@ -45,6 +45,24 @@
 (defvar el-rdf-max-string-length 1000
   "Maximum string length before content is stored as file reference. Set to nil to disable.")
 
+;; Checkpointing system for el-rdf
+(defvar el-rdf-checkpoint-dir nil
+  "Directory where graph checkpoints are stored. Defaults to XDG_CACHE_HOME/el-rdf/checkpoints/")
+
+(defun el-rdf--get-checkpoint-dir ()
+  "Get the checkpoint directory for el-rdf, creating it if necessary."
+  (let ((checkpoint-dir (or el-rdf-checkpoint-dir
+                           (let ((cache-dir (or (getenv "XDG_CACHE_HOME")
+                                               (expand-file-name ".cache" (getenv "HOME")))))
+                             (expand-file-name "el-rdf/checkpoints" cache-dir)))))
+    (unless (file-directory-p checkpoint-dir)
+      (make-directory checkpoint-dir t))
+    checkpoint-dir))
+
+(defvar el-rdf-graph-checkpoints (make-hash-table :test 'eq)
+  "Hash table mapping graphs to their checkpoint information.
+Each entry is (graph . (name . last-checkpoint-time)).")
+
 (defun el-rdf--get-cache-dir ()
   "Get the cache directory for el-rdf, creating it if necessary."
   (let ((cache-dir (or (getenv "XDG_CACHE_HOME")
@@ -121,6 +139,54 @@ HOOK-TYPE should be 'add-hooks, 'delete-hooks, or 'query-hooks."
 (defun get-graph-hooks (graph hook-type)
   "Get all hooks of HOOK-TYPE from GRAPH."
   (cdr (assoc hook-type (cdr (assoc 'hooks graph)))))
+
+;; Checkpointing functions
+(defun el-rdf-register-graph-for-checkpointing (graph graph-name)
+  "Register a GRAPH for automatic checkpointing with GRAPH-NAME.
+The graph will be checkpointed automatically when add-hooks are triggered."
+  (puthash graph (cons graph-name (current-time)) el-rdf-graph-checkpoints)
+  ;; Add the checkpoint hook to the graph
+  (add-hook-to-graph graph 'add-hooks #'el-rdf-checkpoint-hook))
+
+(defun el-rdf-checkpoint-hook (graph operation data)
+  "Hook function that checkpoints registered graphs after add operations.
+GRAPH is the graph being operated on, OPERATION is the operation type,
+DATA is the operation data (triples list)."
+  (let ((checkpoint-info (gethash graph el-rdf-graph-checkpoints)))
+    (when checkpoint-info
+      (let* ((graph-name (car checkpoint-info))
+             (checkpoint-file (el-rdf-checkpoint-file-path graph-name)))
+        (when el-rdf-debug
+          (princ (format "DEBUG: Hook checkpointing %s to %s after %s\n" 
+                         graph-name checkpoint-file operation)))
+        (save-graph graph checkpoint-file)
+        ;; Update last checkpoint time
+        (puthash graph (cons graph-name (current-time)) el-rdf-graph-checkpoints)))))
+
+(defun el-rdf-checkpoint-file-path (graph-name)
+  "Generate checkpoint file path for a named graph."
+  (let ((checkpoint-dir (el-rdf--get-checkpoint-dir)))
+    (expand-file-name (format "%s.checkpoint" graph-name) checkpoint-dir)))
+
+(defun el-rdf-recover-from-checkpoint (graph-name)
+  "Recover a graph from checkpoint and return it.
+GRAPH-NAME is the string name used in checkpoint files."
+  (let ((checkpoint-file (el-rdf-checkpoint-file-path graph-name)))
+    (if (file-exists-p checkpoint-file)
+        (let ((recovered-graph (make-graph)))
+          (load-graph recovered-graph checkpoint-file)
+          (message "Recovered %s with %d triples from checkpoint"
+                   graph-name
+                   (length (construct '(($s $p $o))
+                                    (graph-query '(($s $p $o)) recovered-graph))))
+          recovered-graph)
+      (error "No checkpoint file found for %s at %s" graph-name checkpoint-file))))
+
+(defun el-rdf-list-checkpoints ()
+  "List all available checkpoint files."
+  (let ((checkpoint-dir (el-rdf--get-checkpoint-dir)))
+    (when (file-exists-p checkpoint-dir)
+      (directory-files checkpoint-dir nil "\\.checkpoint$"))))
 
   (defun update-dual (key val orig)
     ;; orig is ((a (foo:bar baz:guuq))(frob:nix ("1")))
