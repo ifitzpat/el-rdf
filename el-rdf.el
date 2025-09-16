@@ -96,7 +96,31 @@
 (defun make-graph ()
 `((spo . ,(make-hash-table :test 'eq))
   	(osp . ,(make-hash-table :test 'equal))
-  	(pos . ,(make-hash-table :test 'eq))))
+  	(pos . ,(make-hash-table :test 'eq))
+  	(hooks . ((add-hooks . ,(list))
+  	          (delete-hooks . ,(list))
+  	          (query-hooks . ,(list))))))
+
+;; Helper functions for hook management
+(defun add-hook-to-graph (graph hook-type hook-function)
+  "Add HOOK-FUNCTION to HOOK-TYPE hooks in GRAPH.
+HOOK-TYPE should be 'add-hooks, 'delete-hooks, or 'query-hooks."
+  (let* ((hooks (cdr (assoc 'hooks graph)))
+         (hook-entry (assoc hook-type hooks))
+         (hook-list (cdr hook-entry)))
+    (unless (member hook-function hook-list)
+      (setf (cdr hook-entry) (cons hook-function hook-list)))))
+
+(defun remove-hook-from-graph (graph hook-type hook-function)
+  "Remove HOOK-FUNCTION from HOOK-TYPE hooks in GRAPH."
+  (let* ((hooks (cdr (assoc 'hooks graph)))
+         (hook-list (cdr (assoc hook-type hooks))))
+    (setf (cdr (assoc hook-type hooks)) 
+          (remove hook-function hook-list))))
+
+(defun get-graph-hooks (graph hook-type)
+  "Get all hooks of HOOK-TYPE from GRAPH."
+  (cdr (assoc hook-type (cdr (assoc 'hooks graph)))))
 
   (defun update-dual (key val orig)
     ;; orig is ((a (foo:bar baz:guuq))(frob:nix ("1")))
@@ -444,11 +468,19 @@
 
   (defun add-triples (triplist graph)
     "Add multiple triples to the graph."
-    (mapc (lambda (x) (add-triple x graph)) triplist))
+    (mapc (lambda (x) (add-triple x graph)) triplist)
+    ;; Call add-hooks after bulk operation
+    (let ((add-hooks (cdr (assoc 'add-hooks (cdr (assoc 'hooks graph))))))
+      (mapc (lambda (hook) (funcall hook graph 'add-triples triplist)) 
+            add-hooks)))
 
   (defun delete-triples (triplist graph)
     "Delete multiple triples from the graph."
-    (mapc (lambda (x) (delete-triple x graph)) triplist))
+    (mapc (lambda (x) (delete-triple x graph)) triplist)
+    ;; Call delete-hooks after bulk operation
+    (let ((delete-hooks (cdr (assoc 'delete-hooks (cdr (assoc 'hooks graph))))))
+      (mapc (lambda (hook) (funcall hook graph 'delete-triples triplist)) 
+            delete-hooks)))
 
 
   (defun apply-clauses (clauses graph)
@@ -498,6 +530,10 @@
     )
 
   (defun graph-query (clauses graph &optional bindings)
+    ;; Call query-hooks before processing
+    (let ((query-hooks (cdr (assoc 'query-hooks (cdr (assoc 'hooks graph))))))
+      (mapc (lambda (hook) (funcall hook graph 'graph-query clauses)) 
+            query-hooks))
     "Execute a SPARQL-like query against a graph, supporting OPTIONAL clauses.
 
 CLAUSES is a list of triple patterns, e.g., '(($s rdf:type foaf:Person) ($s foaf:name $name))

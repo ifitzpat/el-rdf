@@ -45,6 +45,152 @@
 	 (member (list 'bob) result))
       )))
 
+;; Hook test helpers
+(defvar test-hook-calls nil "Track hook calls for testing")
+
+(defun test-add-hook (graph operation data)
+  "Test hook that records add operations"
+  (push (list :add operation (length data)) test-hook-calls))
+
+(defun test-delete-hook (graph operation data)
+  "Test hook that records delete operations"
+  (push (list :delete operation (length data)) test-hook-calls))
+
+(defun test-query-hook (graph operation data)
+  "Test hook that records query operations"
+  (push (list :query operation (length data)) test-hook-calls))
+
+(ert-deftest test-hook-management ()
+  "Test adding and removing hooks from graphs"
+  (let ((test-graph (make-graph)))
+    ;; Initially no hooks
+    (should (null (get-graph-hooks test-graph 'add-hooks)))
+    (should (null (get-graph-hooks test-graph 'delete-hooks)))
+    (should (null (get-graph-hooks test-graph 'query-hooks)))
+    
+    ;; Add hooks
+    (add-hook-to-graph test-graph 'add-hooks #'test-add-hook)
+    (add-hook-to-graph test-graph 'delete-hooks #'test-delete-hook)
+    (add-hook-to-graph test-graph 'query-hooks #'test-query-hook)
+    
+    ;; Verify hooks were added
+    (should (member #'test-add-hook (get-graph-hooks test-graph 'add-hooks)))
+    (should (member #'test-delete-hook (get-graph-hooks test-graph 'delete-hooks)))
+    (should (member #'test-query-hook (get-graph-hooks test-graph 'query-hooks)))
+    
+    ;; Remove hooks
+    (remove-hook-from-graph test-graph 'add-hooks #'test-add-hook)
+    (remove-hook-from-graph test-graph 'delete-hooks #'test-delete-hook)
+    (remove-hook-from-graph test-graph 'query-hooks #'test-query-hook)
+    
+    ;; Verify hooks were removed
+    (should (null (get-graph-hooks test-graph 'add-hooks)))
+    (should (null (get-graph-hooks test-graph 'delete-hooks)))
+    (should (null (get-graph-hooks test-graph 'query-hooks)))))
+
+(ert-deftest test-add-hooks-execution ()
+  "Test that add-hooks are called during add-triples operations"
+  (setq test-hook-calls nil)
+  (let ((test-graph (make-graph)))
+    ;; Add hook
+    (add-hook-to-graph test-graph 'add-hooks #'test-add-hook)
+    
+    ;; Perform add-triples operation
+    (add-triples '((alice friend bob) (bob friend charlie)) test-graph)
+    
+    ;; Verify hook was called
+    (should (equal test-hook-calls '((:add add-triples 2))))
+    
+    ;; Add more triples
+    (setq test-hook-calls nil)
+    (add-triples '((charlie friend alice)) test-graph)
+    
+    ;; Verify hook was called again
+    (should (equal test-hook-calls '((:add add-triples 1))))))
+
+(ert-deftest test-delete-hooks-execution ()
+  "Test that delete-hooks are called during delete-triples operations"
+  (setq test-hook-calls nil)
+  (let ((test-graph (make-graph)))
+    ;; Add some data first
+    (add-triples '((alice friend bob) (bob friend charlie)) test-graph)
+    
+    ;; Add hook
+    (add-hook-to-graph test-graph 'delete-hooks #'test-delete-hook)
+    
+    ;; Perform delete-triples operation
+    (delete-triples '((alice friend bob)) test-graph)
+    
+    ;; Verify hook was called
+    (should (equal test-hook-calls '((:delete delete-triples 1))))))
+
+(ert-deftest test-query-hooks-execution ()
+  "Test that query-hooks are called during graph-query operations"
+  (setq test-hook-calls nil)
+  (let ((test-graph (make-graph)))
+    ;; Add some data
+    (add-triples '((alice friend bob) (bob friend charlie)) test-graph)
+    
+    ;; Add hook
+    (add-hook-to-graph test-graph 'query-hooks #'test-query-hook)
+    
+    ;; Perform query operation
+    (graph-query '(($x friend $y)) test-graph)
+    
+    ;; Verify hook was called
+    (should (equal test-hook-calls '((:query graph-query 1))))))
+
+(ert-deftest test-multiple-hooks-same-type ()
+  "Test that multiple hooks of the same type are all executed"
+  (setq test-hook-calls nil)
+  (let ((test-graph (make-graph))
+        (hook2-calls nil))
+    ;; Define second hook that uses local variable
+    (let ((local-hook2-calls hook2-calls))
+      (fset 'test-add-hook2 
+            (lambda (graph operation data)
+              (setq local-hook2-calls (cons (list :add2 operation (length data)) local-hook2-calls))))
+      
+      ;; Add both hooks
+      (add-hook-to-graph test-graph 'add-hooks #'test-add-hook)
+      (add-hook-to-graph test-graph 'add-hooks #'test-add-hook2)
+      
+      ;; Perform operation
+      (add-triples '((alice friend bob)) test-graph)
+      
+      ;; Verify both hooks were called
+      (should (equal test-hook-calls '((:add add-triples 1))))
+      (should (equal local-hook2-calls '((:add2 add-triples 1))))
+      
+      ;; Clean up the global function
+      (fmakunbound 'test-add-hook2))))
+
+(ert-deftest test-hooks-do-not-affect-individual-operations ()
+  "Test that individual add-triple and delete-triple do not call hooks"
+  (setq test-hook-calls nil)
+  (let ((test-graph (make-graph)))
+    ;; Add hooks
+    (add-hook-to-graph test-graph 'add-hooks #'test-add-hook)
+    (add-hook-to-graph test-graph 'delete-hooks #'test-delete-hook)
+    
+    ;; Perform individual operations
+    (add-triple '(alice friend bob) test-graph)
+    (delete-triple '(alice friend bob) test-graph)
+    
+    ;; Verify hooks were NOT called
+    (should (null test-hook-calls))))
+
+(ert-deftest test-hook-prevents-duplicates ()
+  "Test that adding the same hook twice doesn't create duplicates"
+  (let ((test-graph (make-graph)))
+    ;; Add same hook twice
+    (add-hook-to-graph test-graph 'add-hooks #'test-add-hook)
+    (add-hook-to-graph test-graph 'add-hooks #'test-add-hook)
+    
+    ;; Should only appear once
+    (should (= 1 (length (get-graph-hooks test-graph 'add-hooks))))
+    (should (member #'test-add-hook (get-graph-hooks test-graph 'add-hooks)))))
+
 (ert-deftest test-filter ()
   "Test the filter function with multiple bindings of $b"
   (let* ((test-graph (make-graph))
