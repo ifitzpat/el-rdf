@@ -111,13 +111,16 @@ Each entry is (graph . (name . last-checkpoint-time)).")
   "Resolve triple object, loading content from reference if needed."
   (el-rdf--resolve-content-reference obj))
 
-(defun make-graph ()
+(defun make-graph (&optional name)
+  "Create a new RDF graph with optional NAME for checkpointing.
+If NAME is provided, the graph can be easily saved/restored by name."
 `((spo . ,(make-hash-table :test 'eq))
   	(osp . ,(make-hash-table :test 'equal))
   	(pos . ,(make-hash-table :test 'eq))
   	(hooks . ((add-hooks . ,(list))
   	          (delete-hooks . ,(list))
-  	          (query-hooks . ,(list))))))
+  	          (query-hooks . ,(list))))
+  	(name . ,name)))
 
 ;; Helper functions for hook management
 (defun add-hook-to-graph (graph hook-type hook-function)
@@ -152,14 +155,22 @@ The graph will be checkpointed automatically when add-hooks are triggered."
   "Hook function that checkpoints registered graphs after add operations.
 GRAPH is the graph being operated on, OPERATION is the operation type,
 DATA is the operation data (triples list)."
-  (let ((checkpoint-info (gethash graph el-rdf-graph-checkpoints)))
+  (let ((checkpoint-info (gethash graph el-rdf-graph-checkpoints))
+        (graph-name (cdr (assoc 'name graph))))
     (when checkpoint-info
-      (let* ((graph-name (car checkpoint-info))
-             (checkpoint-file (el-rdf-checkpoint-file-path graph-name)))
+      (let* ((registered-name (car checkpoint-info))
+             ;; Use graph's internal name if available, fall back to registered name
+             (actual-name (or graph-name registered-name))
+             (checkpoint-file (el-rdf-checkpoint-file-path actual-name)))
         (when el-rdf-debug
           (princ (format "DEBUG: Hook checkpointing %s to %s after %s\n" 
                          graph-name checkpoint-file operation)))
+        ;; Save the graph data
         (save-graph graph checkpoint-file)
+        
+        ;; Save metadata
+        (el-rdf-save-checkpoint-metadata graph-name operation data)
+        
         ;; Update last checkpoint time
         (puthash graph (cons graph-name (current-time)) el-rdf-graph-checkpoints)))))
 
@@ -170,17 +181,80 @@ DATA is the operation data (triples list)."
 
 (defun el-rdf-recover-from-checkpoint (graph-name)
   "Recover a graph from checkpoint and return it.
-GRAPH-NAME is the string name used in checkpoint files."
+GRAPH-NAME is the string name used in checkpoint files.
+Also loads and displays metadata if available.
+The recovered graph includes the name but is NOT automatically re-registered for checkpointing."
   (let ((checkpoint-file (el-rdf-checkpoint-file-path graph-name)))
     (if (file-exists-p checkpoint-file)
-        (let ((recovered-graph (make-graph)))
+        (let ((recovered-graph (make-graph graph-name))
+              (metadata (el-rdf-load-checkpoint-metadata graph-name)))
           (load-graph recovered-graph checkpoint-file)
           (message "Recovered %s with %d triples from checkpoint"
                    graph-name
                    (length (construct '(($s $p $o))
                                     (graph-query '(($s $p $o)) recovered-graph))))
+          ;; Display metadata if available
+          (when metadata
+            (message "Last operation: %s, Data size: %d, Recursion depth: %d"
+                     (plist-get metadata :last-operation)
+                     (plist-get metadata :data-size)
+                     (plist-get metadata :recursion-depth))
+            (when (plist-get metadata :call-stack)
+              (message "Call stack: %s" (plist-get metadata :call-stack))))
           recovered-graph)
       (error "No checkpoint file found for %s at %s" graph-name checkpoint-file))))
+
+(defun el-rdf-recover-and-register (graph-name)
+  "Recover a graph from checkpoint and automatically re-register it for checkpointing.
+Returns the recovered graph ready for continued checkpointing."
+  (let ((recovered-graph (el-rdf-recover-from-checkpoint graph-name)))
+    (el-rdf-register-graph-for-checkpointing recovered-graph graph-name)
+    (message "Graph %s recovered and re-registered for checkpointing" graph-name)
+    recovered-graph))
+
+(defun el-rdf-save-named-graph (graph)
+  "Save a named graph to its checkpoint file immediately.
+The graph must have been created with make-graph with a name parameter."
+  (let ((graph-name (cdr (assoc 'name graph))))
+    (if graph-name
+        (progn
+          (save-graph graph (el-rdf-checkpoint-file-path graph-name))
+          (el-rdf-save-checkpoint-metadata graph-name 'manual-save '())
+          (message "Saved graph %s to checkpoint" graph-name))
+      (error "Graph has no name - cannot save by name"))))
+
+(defun el-rdf-restore-named-graph (graph-name)
+  "Convenience function combining recovery and registration.
+Creates a named graph, recovers from checkpoint, and registers for checkpointing.
+This is the recommended way to restore graphs for continued use."
+  (el-rdf-recover-and-register graph-name))
+
+(defun el-rdf-save-checkpoint-metadata (graph-name operation data)
+  "Save checkpoint metadata for GRAPH-NAME after OPERATION with DATA.
+Metadata includes operation type, data size, timestamp, and call stack information."
+  (let ((metadata-file (expand-file-name 
+                        (format "%s.metadata" graph-name) 
+                        (el-rdf--get-checkpoint-dir)))
+        (call-stack (when (boundp 'neurosymb-predicate-call-stack)
+                      (symbol-value 'neurosymb-predicate-call-stack))))
+    (with-temp-file metadata-file
+      (prin1 (list :last-operation operation
+                   :data-size (length data)
+                   :timestamp (current-time)
+                   :call-stack call-stack
+                   :recursion-depth (length call-stack))
+             (current-buffer)))))
+
+(defun el-rdf-load-checkpoint-metadata (graph-name)
+  "Load checkpoint metadata for GRAPH-NAME and return it as a plist.
+Returns nil if metadata file doesn't exist."
+  (let ((metadata-file (expand-file-name 
+                        (format "%s.metadata" graph-name) 
+                        (el-rdf--get-checkpoint-dir))))
+    (when (file-exists-p metadata-file)
+      (with-temp-buffer
+        (insert-file-contents metadata-file)
+        (read (current-buffer))))))
 
 (defun el-rdf-list-checkpoints ()
   "List all available checkpoint files."
