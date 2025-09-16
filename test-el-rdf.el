@@ -191,6 +191,152 @@
     (should (= 1 (length (get-graph-hooks test-graph 'add-hooks))))
     (should (member #'test-add-hook (get-graph-hooks test-graph 'add-hooks)))))
 
+;; Checkpointing tests
+(defvar test-checkpoint-dir "/tmp/test-el-rdf-checkpoints"
+  "Test directory for checkpoints.")
+
+(defun test-cleanup-checkpoints ()
+  "Clean up test checkpoint files."
+  (when (file-exists-p test-checkpoint-dir)
+    (delete-directory test-checkpoint-dir t)))
+
+(ert-deftest test-checkpoint-directory ()
+  "Test XDG cache directory creation and usage."
+  (let ((el-rdf-checkpoint-dir test-checkpoint-dir))
+    (test-cleanup-checkpoints)
+    
+    ;; Directory should be created when first accessed
+    (should-not (file-exists-p test-checkpoint-dir))
+    (let ((dir (el-rdf--get-checkpoint-dir)))
+      (should (string= dir test-checkpoint-dir))
+      (should (file-exists-p test-checkpoint-dir)))
+    
+    ;; Clean up
+    (test-cleanup-checkpoints)))
+
+(ert-deftest test-checkpoint-registration ()
+  "Test graph registration for checkpointing."
+  (let ((test-graph (make-graph))
+        (el-rdf-checkpoint-dir test-checkpoint-dir))
+    (test-cleanup-checkpoints)
+    
+    ;; Register graph for checkpointing
+    (el-rdf-register-graph-for-checkpointing test-graph "test-graph")
+    
+    ;; Check that graph is registered
+    (should (gethash test-graph el-rdf-graph-checkpoints))
+    (should (string= "test-graph" (car (gethash test-graph el-rdf-graph-checkpoints))))
+    
+    ;; Check that checkpoint hook was added
+    (should (member #'el-rdf-checkpoint-hook (get-graph-hooks test-graph 'add-hooks)))
+    
+    ;; Clean up
+    (test-cleanup-checkpoints)
+    (remhash test-graph el-rdf-graph-checkpoints)))
+
+(ert-deftest test-automatic-checkpointing ()
+  "Test that graphs are automatically checkpointed on add-triples."
+  (let ((test-graph (make-graph))
+        (el-rdf-checkpoint-dir test-checkpoint-dir))
+    (test-cleanup-checkpoints)
+    
+    ;; Register graph for checkpointing
+    (el-rdf-register-graph-for-checkpointing test-graph "test-auto-checkpoint")
+    
+    ;; Add triples (should trigger checkpoint)
+    (add-triples '((alice friend bob) (bob friend charlie)) test-graph)
+    
+    ;; Check that checkpoint file was created
+    (should (file-exists-p (el-rdf-checkpoint-file-path "test-auto-checkpoint")))
+    
+    ;; Clean up
+    (test-cleanup-checkpoints)
+    (remhash test-graph el-rdf-graph-checkpoints)))
+
+(ert-deftest test-checkpoint-recovery ()
+  "Test recovering graphs from checkpoints."
+  (let ((test-graph (make-graph))
+        (el-rdf-checkpoint-dir test-checkpoint-dir))
+    (test-cleanup-checkpoints)
+    
+    ;; Create and checkpoint a graph with data
+    (add-triples '((alice friend bob) (bob friend charlie) (alice age 30)) test-graph)
+    (el-rdf-register-graph-for-checkpointing test-graph "test-recovery")
+    (add-triples '((charlie friend alice)) test-graph) ; This triggers checkpoint
+    
+    ;; Recover the graph
+    (let ((recovered-graph (el-rdf-recover-from-checkpoint "test-recovery")))
+      ;; Check that all data was recovered
+      (should (= 4 (length (triples '(t t t) recovered-graph))))
+      ;; Check that each expected triple exists
+      (let ((recovered-triples (triples '(t t t) recovered-graph)))
+        (should (member '(alice friend bob) recovered-triples))
+        (should (member '(bob friend charlie) recovered-triples))
+        (should (member '(alice age 30) recovered-triples))
+        (should (member '(charlie friend alice) recovered-triples))))
+    
+    ;; Clean up
+    (test-cleanup-checkpoints)
+    (remhash test-graph el-rdf-graph-checkpoints)))
+
+(ert-deftest test-checkpoint-file-path ()
+  "Test checkpoint file path generation."
+  (let ((el-rdf-checkpoint-dir test-checkpoint-dir))
+    (test-cleanup-checkpoints)
+    
+    (let ((path (el-rdf-checkpoint-file-path "my-graph")))
+      (should (string-suffix-p "/my-graph.checkpoint" path))
+      (should (string-prefix-p test-checkpoint-dir path)))
+    
+    (test-cleanup-checkpoints)))
+
+(ert-deftest test-list-checkpoints ()
+  "Test listing available checkpoint files."
+  (let ((el-rdf-checkpoint-dir test-checkpoint-dir))
+    (test-cleanup-checkpoints)
+    
+    ;; Initially no checkpoints
+    (should (null (el-rdf-list-checkpoints)))
+    
+    ;; Create some test graphs and checkpoints
+    (let ((graph1 (make-graph))
+          (graph2 (make-graph)))
+      (add-triples '((alice friend bob)) graph1)
+      (add-triples '((charlie friend dave)) graph2)
+      
+      (el-rdf-register-graph-for-checkpointing graph1 "graph-one")
+      (el-rdf-register-graph-for-checkpointing graph2 "graph-two")
+      
+      ;; Trigger checkpoints
+      (add-triples '((bob friend charlie)) graph1)
+      (add-triples '((dave friend alice)) graph2)
+      
+      ;; List checkpoints
+      (let ((checkpoints (el-rdf-list-checkpoints)))
+        (should (= 2 (length checkpoints)))
+        (should (member "graph-one.checkpoint" checkpoints))
+        (should (member "graph-two.checkpoint" checkpoints)))
+      
+      ;; Clean up
+      (remhash graph1 el-rdf-graph-checkpoints)
+      (remhash graph2 el-rdf-graph-checkpoints))
+    
+    (test-cleanup-checkpoints)))
+
+(ert-deftest test-checkpoint-no-hooks-without-registration ()
+  "Test that graphs without checkpoint registration don't get checkpointed."
+  (let ((test-graph (make-graph))
+        (el-rdf-checkpoint-dir test-checkpoint-dir))
+    (test-cleanup-checkpoints)
+    
+    ;; Add triples without registering for checkpointing
+    (add-triples '((alice friend bob) (bob friend charlie)) test-graph)
+    
+    ;; No checkpoint should be created
+    (should (null (el-rdf-list-checkpoints)))
+    
+    (test-cleanup-checkpoints)))
+
 (ert-deftest test-filter ()
   "Test the filter function with multiple bindings of $b"
   (let* ((test-graph (make-graph))
