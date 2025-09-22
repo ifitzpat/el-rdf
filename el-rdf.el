@@ -4,7 +4,7 @@
 
 ;; Author: Ian FitzPatrick ian@ianfitzpatrick.eu
 ;; URL: codeberg.org/ifitzpat/el-rdf
-;; Version: 0.2.0
+;; Version: 0.2.1
 ;; Package-Requires: ((emacs "27.1")(request)(dash "20250312.1307"))
 ;; Keywords: rdf triple-store
 
@@ -1085,13 +1085,24 @@ predobj)
           prefixed-iri))
     prefixed-iri))
 
-(defun el-rdf--intern-rdf-resource (graph resource-string)
-  "Convert RDF resource string to symbol, keeping prefixed form."
-  ;; Keep the original prefixed form as the symbol name for readability
-  (intern resource-string))
+(defun el-rdf--intern-rdf-resource (graph resource-string &optional namespace)
+  "Convert RDF resource string to symbol, keeping prefixed form.
+If NAMESPACE is provided, prefix the resource with it."
+  (let ((final-resource-string
+         (if namespace
+             (if (string-prefix-p ":" resource-string)
+                 ;; Handle cases like ":hasOccupation" -> "schema:hasOccupation"
+                 (concat namespace resource-string)
+               ;; Handle cases like "hasOccupation" -> "schema:hasOccupation"
+               (if (string-match ":" resource-string)
+                   resource-string  ; Already has namespace, keep as-is
+                 (concat namespace ":" resource-string)))
+           resource-string)))
+    (intern final-resource-string)))
 
-(defun el-rdf--parse-ttl-value (graph value-string)
-  "Parse a TTL value (IRI, literal, blank node) into appropriate Lisp form."
+(defun el-rdf--parse-ttl-value (graph value-string &optional namespace)
+  "Parse a TTL value (IRI, literal, blank node) into appropriate Lisp form.
+If NAMESPACE is provided, prefix resources with it."
   (cond
    ((string-prefix-p "<" value-string)
     (let ((iri (substring value-string 1 -1)))
@@ -1116,9 +1127,9 @@ predobj)
     ;; Use el-rdf's bnode function for consistent blank node format
     (bnode))
    ((string-match ":" value-string)
-    (el-rdf--intern-rdf-resource graph value-string))
+    (el-rdf--intern-rdf-resource graph value-string namespace))
    (t
-    (intern value-string))))
+    (el-rdf--intern-rdf-resource graph value-string namespace))))
 
 (defun el-rdf--tokenize-ttl-line (line)
   "Tokenize a TTL line into subject, predicate, object tokens."
@@ -1138,8 +1149,9 @@ predobj)
               (setq object (substring object 0 -1)))
             (list subject predicate object)))))))
 
-(defun el-rdf--parse-ttl-content (graph content)
-  "Parse TTL content string and add triples to GRAPH."
+(defun el-rdf--parse-ttl-content (graph content &optional namespace)
+  "Parse TTL content string and add triples to GRAPH.
+If NAMESPACE is provided, prefix all imported resources with it."
   (let ((lines (split-string content "\n" t)))
     (dolist (line lines)
       (let ((line (string-trim line)))
@@ -1156,9 +1168,9 @@ predobj)
               (let* ((subject-str (nth 0 tokens))
                      (predicate-str (nth 1 tokens))
                      (object-str (nth 2 tokens))
-                     (subject (el-rdf--parse-ttl-value graph subject-str))
-                     (predicate (el-rdf--parse-ttl-value graph predicate-str))
-                     (object (el-rdf--parse-ttl-value graph object-str))
+                     (subject (el-rdf--parse-ttl-value graph subject-str namespace))
+                     (predicate (el-rdf--parse-ttl-value graph predicate-str namespace))
+                     (object (el-rdf--parse-ttl-value graph object-str namespace))
                      ;; Normalize rdf:type predicate to 'rdf:type symbol for consistency
                      (predicate (if (and (symbolp predicate)
                                          (string= (symbol-name predicate)
@@ -1167,13 +1179,16 @@ predobj)
                                   predicate)))
                 (add-triple (list subject predicate object) graph))))))))))
 
-(defun import-ttl (filename graph)
-  "Import TTL file FILENAME into GRAPH, expanding prefixes to symbols."
+(defun import-ttl (filename graph &optional namespace)
+  "Import TTL file FILENAME into GRAPH, expanding prefixes to symbols.
+If NAMESPACE is provided, all imported resources will be prefixed with it.
+For example, with NAMESPACE \"schema\", resources become schema:hasOccupation."
   (when (file-exists-p filename)
     (with-temp-buffer
       (insert-file-contents filename)
-      (el-rdf--parse-ttl-content graph (buffer-string)))
-    (message "Imported TTL file: %s" filename)
+      (el-rdf--parse-ttl-content graph (buffer-string) namespace))
+    (message "Imported TTL file: %s%s" filename
+             (if namespace (format " with namespace %s" namespace) ""))
     graph))
 
 (provide 'el-rdf)

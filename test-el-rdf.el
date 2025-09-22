@@ -1085,6 +1085,41 @@ ex:bob ex:name \"Bob\" .
     ;; Clean up
     (delete-file "/tmp/test-comments.ttl")))
 
+(ert-deftest test-ttl-import-with-namespace ()
+  "Test TTL import with optional namespace parameter for prefixing resources"
+  (let ((test-graph (make-graph))
+        (ttl-content "@prefix schema: <https://schema.org/> .
+schema:Person rdfs:label \"Person\" .
+:hasOccupation rdfs:label \"has occupation\" .
+someProperty rdfs:label \"some property\" ."))
+    
+    ;; Create temporary TTL file
+    (with-temp-file "/tmp/test-namespace.ttl"
+      (insert ttl-content))
+    
+    ;; Import with namespace "myschema"
+    (import-ttl "/tmp/test-namespace.ttl" test-graph "myschema")
+    
+    ;; Verify all triples were imported
+    (let ((all-triples (triples '(t t t) test-graph)))
+      (should (= 3 (length all-triples))))
+    
+    ;; Verify that resources with existing prefixes are unchanged
+    (should (ask '((schema:Person rdfs:label "Person")) test-graph))
+    
+    ;; Verify that resources starting with : get namespace prefix
+    (should (ask '((myschema:hasOccupation rdfs:label "has occupation")) test-graph))
+    
+    ;; Verify that bare resources get namespace prefix
+    (should (ask '((myschema:someProperty rdfs:label "some property")) test-graph))
+    
+    ;; Verify that the un-prefixed versions are NOT found
+    (should-not (ask '((:hasOccupation rdfs:label "has occupation")) test-graph))
+    (should-not (ask '((someProperty rdfs:label "some property")) test-graph))
+    
+    ;; Clean up
+    (delete-file "/tmp/test-namespace.ttl")))
+
 (ert-deftest test-ttl-import-nonexistent-file ()
   "Test TTL import handles nonexistent files gracefully"
   (let ((test-graph (make-graph)))
