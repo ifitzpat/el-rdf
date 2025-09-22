@@ -136,7 +136,7 @@ HOOK-TYPE should be 'add-hooks, 'delete-hooks, or 'query-hooks."
   "Remove HOOK-FUNCTION from HOOK-TYPE hooks in GRAPH."
   (let* ((hooks (cdr (assoc 'hooks graph)))
          (hook-list (cdr (assoc hook-type hooks))))
-    (setf (cdr (assoc hook-type hooks)) 
+    (setf (cdr (assoc hook-type hooks))
           (remove hook-function hook-list))))
 
 (defun get-graph-hooks (graph hook-type)
@@ -163,14 +163,14 @@ DATA is the operation data (triples list)."
              (actual-name (or graph-name registered-name))
              (checkpoint-file (el-rdf-checkpoint-file-path actual-name)))
         (when el-rdf-debug
-          (princ (format "DEBUG: Hook checkpointing %s to %s after %s\n" 
+          (princ (format "DEBUG: Hook checkpointing %s to %s after %s\n"
                          graph-name checkpoint-file operation)))
         ;; Save the graph data
         (save-graph graph checkpoint-file)
-        
+
         ;; Save metadata
         (el-rdf-save-checkpoint-metadata graph-name operation data)
-        
+
         ;; Update last checkpoint time
         (puthash graph (cons graph-name (current-time)) el-rdf-graph-checkpoints)))))
 
@@ -204,6 +204,9 @@ The recovered graph includes the name but is NOT automatically re-registered for
           recovered-graph)
       (error "No checkpoint file found for %s at %s" graph-name checkpoint-file))))
 
+(defun bnode ()
+   (intern (concat "_:" (symbol-name (gensym)))))
+
 (defun el-rdf-recover-and-register (graph-name)
   "Recover a graph from checkpoint and automatically re-register it for checkpointing.
 Returns the recovered graph ready for continued checkpointing."
@@ -232,8 +235,8 @@ This is the recommended way to restore graphs for continued use."
 (defun el-rdf-save-checkpoint-metadata (graph-name operation data)
   "Save checkpoint metadata for GRAPH-NAME after OPERATION with DATA.
 Metadata includes operation type, data size, timestamp, and call stack information."
-  (let ((metadata-file (expand-file-name 
-                        (format "%s.metadata" graph-name) 
+  (let ((metadata-file (expand-file-name
+                        (format "%s.metadata" graph-name)
                         (el-rdf--get-checkpoint-dir)))
         (call-stack (when (boundp 'neurosymb-predicate-call-stack)
                       (symbol-value 'neurosymb-predicate-call-stack))))
@@ -248,8 +251,8 @@ Metadata includes operation type, data size, timestamp, and call stack informati
 (defun el-rdf-load-checkpoint-metadata (graph-name)
   "Load checkpoint metadata for GRAPH-NAME and return it as a plist.
 Returns nil if metadata file doesn't exist."
-  (let ((metadata-file (expand-file-name 
-                        (format "%s.metadata" graph-name) 
+  (let ((metadata-file (expand-file-name
+                        (format "%s.metadata" graph-name)
                         (el-rdf--get-checkpoint-dir))))
     (when (file-exists-p metadata-file)
       (with-temp-buffer
@@ -384,7 +387,7 @@ Returns nil if metadata file doesn't exist."
                     (cond
                      ((eq reorder 'pos)
                       (setq result (cons (list value element key) result)))
-                     ((eq reorder 'osp)  
+                     ((eq reorder 'osp)
                       (setq result (cons (list key value element) result)))
                      (t
                       (setq result (cons (list element key value) result))))
@@ -432,7 +435,7 @@ Returns nil if metadata file doesn't exist."
   	(p (nth 1 pattern))
   	(o (nth 2 pattern)))
       ; (princ (format "DEBUG triples: pattern=%s, s=%s p=%s o=%s\n" pattern s p o))
-      (let ((raw-results 
+      (let ((raw-results
              (cond
               ((not (var-or-wild? s))
                ; (princ (format "DEBUG triples: using SPO index for subject %s\n" s))
@@ -479,10 +482,10 @@ Returns nil if metadata file doesn't exist."
                    (let ((all-keys '())
                          (temp-key nil)
                          (temp-value nil))
-                     (maphash (lambda (k v) 
+                     (maphash (lambda (k v)
                                 (setq temp-key k)
                                 (setq temp-value v)
-                                (push temp-key all-keys)) 
+                                (push temp-key all-keys))
                               spo-table)
                      (while all-keys
                        (let ((batch-keys (cl-subseq all-keys 0 (min batch-size (length all-keys)))))
@@ -611,7 +614,7 @@ Returns nil if metadata file doesn't exist."
     (mapc (lambda (x) (add-triple x graph)) triplist)
     ;; Call add-hooks after bulk operation
     (let ((add-hooks (cdr (assoc 'add-hooks (cdr (assoc 'hooks graph))))))
-      (mapc (lambda (hook) (funcall hook graph 'add-triples triplist)) 
+      (mapc (lambda (hook) (funcall hook graph 'add-triples triplist))
             add-hooks)))
 
   (defun delete-triples (triplist graph)
@@ -619,7 +622,7 @@ Returns nil if metadata file doesn't exist."
     (mapc (lambda (x) (delete-triple x graph)) triplist)
     ;; Call delete-hooks after bulk operation
     (let ((delete-hooks (cdr (assoc 'delete-hooks (cdr (assoc 'hooks graph))))))
-      (mapc (lambda (hook) (funcall hook graph 'delete-triples triplist)) 
+      (mapc (lambda (hook) (funcall hook graph 'delete-triples triplist))
             delete-hooks)))
 
 
@@ -672,7 +675,7 @@ Returns nil if metadata file doesn't exist."
   (defun graph-query (clauses graph &optional bindings)
     ;; Call query-hooks before processing
     (let ((query-hooks (cdr (assoc 'query-hooks (cdr (assoc 'hooks graph))))))
-      (mapc (lambda (hook) (funcall hook graph 'graph-query clauses)) 
+      (mapc (lambda (hook) (funcall hook graph 'graph-query clauses))
             query-hooks))
     "Execute a SPARQL-like query against a graph, supporting OPTIONAL clauses.
 
@@ -854,7 +857,7 @@ EXECUTION PATHS:
 (defun select (binding-list where)
   "Execute a SELECT query with SPARQL semantics for failed matches.
 BINDING-LIST is the list of variables to select.
-WHERE should be the result of (graph-query clauses graph), but if the entire 
+WHERE should be the result of (graph-query clauses graph), but if the entire
 WHERE clause fails to match, return nil values for all bindings."
   (if where
       (mapcan (lambda (r)
