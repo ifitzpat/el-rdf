@@ -1104,80 +1104,209 @@ If NAMESPACE is provided, prefix the resource with it."
   "Parse a TTL value (IRI, literal, blank node) into appropriate Lisp form.
 If NAMESPACE is provided, prefix resources with it."
   (cond
+   ;; Handle 'a' special case - it's rdf:type, don't add namespace
+   ((string= value-string "a")
+    'a)
+   ;; Handle angle bracket IRIs
    ((string-prefix-p "<" value-string)
     (let ((iri (substring value-string 1 -1)))
       (intern iri)))
+   ;; Handle quoted strings with proper unescaping
    ((string-prefix-p "\"" value-string)
-    (if (string-match "\"\\(.*?\\)\"\\(@\\([a-zA-Z-]+\\)\\|\\^\\^<\\(.+\\)>\\)?" value-string)
-        (let ((literal-value (match-string 1 value-string))
-              (lang (match-string 3 value-string))
-              (datatype (match-string 4 value-string)))
-          (cond
-           (datatype
-            (if (string= datatype "http://www.w3.org/2001/XMLSchema#integer")
-                (string-to-number literal-value)
-              literal-value))
-           (lang
-            ;; TODO: Add proper language tag support to el-rdf
-            ;; For now, strip language tags and return just the literal value
-            literal-value)
-           (t literal-value)))
-      value-string))
+    ;; Check if this is a triple-quoted string
+    (if (and (>= (length value-string) 6)
+             (string-prefix-p "\"\"\"" value-string)
+             (string-suffix-p "\"\"\"" value-string))
+        ;; Handle triple-quoted string - extract content between triple quotes
+        (let ((literal-value (substring value-string 3 -3)))
+          ;; Don't unescape triple-quoted strings - they preserve literal content including newlines
+          literal-value)
+      ;; Handle regular quoted string
+      (if (string-match "\"\\(\\(?:[^\"\\\\]\\|\\\\.\\)*\\)\"\\(@\\([a-zA-Z-]+\\)\\|\\^\\^<\\(.+\\)>\\)?" value-string)
+          (let ((literal-value (match-string 1 value-string))
+                (lang (match-string 3 value-string))
+                (datatype (match-string 4 value-string)))
+            ;; Unescape the literal value
+            (setq literal-value (replace-regexp-in-string "\\\\\\(.\\)" "\\1" literal-value))
+            (cond
+             (datatype
+              (if (string= datatype "http://www.w3.org/2001/XMLSchema#integer")
+                  (string-to-number literal-value)
+                literal-value))
+             (lang
+              ;; TODO: Add proper language tag support to el-rdf
+              ;; For now, strip language tags and return just the literal value
+              literal-value)
+             (t literal-value)))
+        ;; Fallback for malformed quoted strings
+        (substring value-string 1 -1))))
+   ;; Handle blank nodes
    ((string-prefix-p "_:" value-string)
     ;; Use el-rdf's bnode function for consistent blank node format
     (bnode))
+   ;; Handle URLs that look like http://... without angle brackets
+   ((string-match "^https?://" value-string)
+    (intern value-string))
+   ;; Handle prefixed resources
    ((string-match ":" value-string)
     (el-rdf--intern-rdf-resource graph value-string namespace))
+   ;; Handle bare resources
    (t
     (el-rdf--intern-rdf-resource graph value-string namespace))))
 
-(defun el-rdf--tokenize-ttl-line (line)
-  "Tokenize a TTL line into subject, predicate, object tokens."
-  (let ((line (string-trim line))
-        tokens)
-    (when (and (> (length line) 0)
-               (not (string-prefix-p "#" line)))
-      (let ((parts (split-string line "[ \t]+" t)))
-        (when (>= (length parts) 3)
-          (let* ((subject (nth 0 parts))
-                 (predicate (nth 1 parts))
-                 (object-parts (nthcdr 2 parts))
-                 (object (string-join object-parts " ")))
-            (when (string-suffix-p " ." object)
-              (setq object (substring object 0 -2)))
-            (when (string-suffix-p "." object)
-              (setq object (substring object 0 -1)))
-            (list subject predicate object)))))))
+(defun el-rdf--simple-tokenize-ttl (content)
+  "Simple tokenizer that handles quoted strings properly."
+  (let ((tokens '())
+        (pos 0)
+        (len (length content)))
+    (while (< pos len)
+      (let ((char (aref content pos)))
+        (cond
+         ;; Skip whitespace and newlines
+         ((memq char '(?\s ?\t ?\n ?\r))
+          (setq pos (1+ pos)))
+         ;; Handle quoted strings - both single and triple quotes
+         ((eq char ?\")
+          (let ((start pos))
+            ;; Check if this is a triple quote
+            (if (and (< (+ pos 2) len)
+                     (eq (aref content (+ pos 1)) ?\")
+                     (eq (aref content (+ pos 2)) ?\"))
+                ;; Handle triple-quoted string
+                (progn
+                  (setq pos (+ pos 3)) ; Skip opening triple quotes
+                  (while (and (< (+ pos 2) len)
+                              (not (and (eq (aref content pos) ?\")
+                                        (eq (aref content (+ pos 1)) ?\")
+                                        (eq (aref content (+ pos 2)) ?\"))))
+                    (setq pos (1+ pos)))
+                  (when (< (+ pos 2) len) ; Include closing triple quotes
+                    (setq pos (+ pos 3)))
+                  (push (substring content start pos) tokens))
+              ;; Handle single-quoted string
+              (progn
+                (setq pos (1+ pos)) ; Skip opening quote
+                (while (and (< pos len)
+                            (not (eq (aref content pos) ?\")))
+                  (when (eq (aref content pos) ?\\) ; Handle escaped characters
+                    (setq pos (1+ pos)))
+                  (setq pos (1+ pos)))
+                (when (< pos len) ; Include closing quote
+                  (setq pos (1+ pos)))
+                (push (substring content start pos) tokens)))))
+         ;; Handle angle bracket IRIs
+         ((eq char ?<)
+          (let ((start pos))
+            (while (and (< pos len) (not (eq (aref content pos) ?>)))
+              (setq pos (1+ pos)))
+            (when (< pos len) ; Include closing bracket
+              (setq pos (1+ pos)))
+            (push (substring content start pos) tokens)))
+         ;; Handle special punctuation
+         ((memq char '(?\; ?\. ?\,))
+          (push (char-to-string char) tokens)
+          (setq pos (1+ pos)))
+         ;; Handle regular tokens
+         (t
+          (let ((start pos))
+            (while (and (< pos len)
+                        (not (memq (aref content pos) '(?\s ?\t ?\n ?\r ?\; ?\. ?\, ?< ?\"))))
+              (setq pos (1+ pos)))
+            (when (> pos start)
+              (push (substring content start pos) tokens)))))))
+    (nreverse tokens)))
+
+(defun el-rdf--parse-simple-ttl-statement (tokens start-pos)
+  "Parse a single TTL statement from TOKENS starting at START-POS.
+Returns (triples . next-pos)."
+  (let ((pos start-pos)
+        (len (length tokens))
+        (triples '())
+        subject)
+    (when (< pos len)
+      ;; Get subject
+      (setq subject (nth pos tokens))
+      (setq pos (1+ pos))
+
+      ;; Parse predicate-object pairs
+      (while (and (< pos len)
+                  (not (equal (nth pos tokens) ".")))
+        (when (< (1+ pos) len) ; Need at least predicate and object
+          (let ((predicate (nth pos tokens)))
+            (setq pos (1+ pos))
+            ;; Parse comma-separated objects for this predicate
+            (while (and (< pos len)
+                        (not (member (nth pos tokens) '(";" "."))))
+              (let ((object (nth pos tokens)))
+                (unless (equal object ",")
+                  (push (list subject predicate object) triples))
+                (setq pos (1+ pos))
+                ;; Skip comma if present
+                (when (and (< pos len) (equal (nth pos tokens) ","))
+                  (setq pos (1+ pos)))))
+            ;; Skip semicolon if present
+            (when (and (< pos len) (equal (nth pos tokens) ";"))
+              (setq pos (1+ pos))))))
+
+      ;; Skip period if present
+      (when (and (< pos len) (equal (nth pos tokens) "."))
+        (setq pos (1+ pos))))
+
+    (cons (nreverse triples) pos)))
 
 (defun el-rdf--parse-ttl-content (graph content &optional namespace)
   "Parse TTL content string and add triples to GRAPH.
-If NAMESPACE is provided, prefix all imported resources with it."
+If NAMESPACE is provided, prefix all imported resources with it.
+Properly handles semicolon syntax where multiple predicate-object pairs
+can share the same subject, and periods terminate statements."
+  ;; First pass: extract @prefix declarations using simple regex
   (let ((lines (split-string content "\n" t)))
     (dolist (line lines)
       (let ((line (string-trim line)))
+        (when (string-prefix-p "@prefix" line)
+          (when (string-match "@prefix\\s-+\\([^:]+\\):\\s-*<\\([^>]+\\)>" line)
+            (let ((prefix (string-trim (match-string 1 line)))
+                  (namespace-uri (match-string 2 line)))
+              (el-rdf--register-prefix graph prefix namespace-uri)))))))
+
+  ;; Second pass: parse triples using the new tokenizer
+  (let* ((tokens (el-rdf--simple-tokenize-ttl content))
+         (pos 0)
+         (len (length tokens)))
+    (while (< pos len)
+      (let ((token (nth pos tokens)))
         (cond
-         ((string-prefix-p "@prefix" line)
-          (when (string-match "@prefix \\([^:]+\\): <\\(.+\\)> \\." line)
-            (let ((prefix (match-string 1 line))
-                  (namespace (match-string 2 line)))
-              (el-rdf--register-prefix graph prefix namespace))))
-         ((and (> (length line) 0)
-               (not (string-prefix-p "#" line)))
-          (let ((tokens (el-rdf--tokenize-ttl-line line)))
-            (when tokens
-              (let* ((subject-str (nth 0 tokens))
-                     (predicate-str (nth 1 tokens))
-                     (object-str (nth 2 tokens))
-                     (subject (el-rdf--parse-ttl-value graph subject-str namespace))
-                     (predicate (el-rdf--parse-ttl-value graph predicate-str namespace))
-                     (object (el-rdf--parse-ttl-value graph object-str namespace))
-                     ;; Normalize rdf:type predicate to 'rdf:type symbol for consistency
-                     (predicate (if (and (symbolp predicate)
-                                         (string= (symbol-name predicate)
-                                                  "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"))
-                                    'rdf:type
-                                  predicate)))
-                (add-triple (list subject predicate object) graph))))))))))
+         ;; Skip @prefix declarations
+         ((equal token "@prefix")
+          (while (and (< pos len) (not (equal (nth pos tokens) ".")))
+            (setq pos (1+ pos)))
+          (when (< pos len) (setq pos (1+ pos)))) ; Skip period
+         ;; Skip comments
+         ((and token (string-prefix-p "#" token))
+          (setq pos (1+ pos)))
+         ;; Parse statement
+         (t
+          (let ((result (el-rdf--parse-simple-ttl-statement tokens pos)))
+            (let ((triples (car result))
+                  (next-pos (cdr result)))
+              (dolist (triple-tokens triples)
+                (when (= (length triple-tokens) 3)
+                  (let* ((subject-str (nth 0 triple-tokens))
+                         (predicate-str (nth 1 triple-tokens))
+                         (object-str (nth 2 triple-tokens)))
+                    ;; Only process if this isn't a directive
+                    (unless (string-prefix-p "@" subject-str)
+                      (let* ((subject (el-rdf--parse-ttl-value graph subject-str namespace))
+                             (predicate (el-rdf--parse-ttl-value graph predicate-str namespace))
+                             (object (el-rdf--parse-ttl-value graph object-str namespace))
+                             ;; Normalize rdf:type predicate
+                             (predicate (if (and (symbolp predicate)
+                                                 (string= (symbol-name predicate)
+                                                          "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"))
+                                            'rdf:type
+                                          predicate)))
+                        (add-triple (list subject predicate object) graph))))))
+              (setq pos next-pos)))))))))
 
 (defun import-ttl (filename graph &optional namespace)
   "Import TTL file FILENAME into GRAPH, expanding prefixes to symbols.
