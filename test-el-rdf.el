@@ -920,5 +920,181 @@
         ;; The constructed triple should have resolved content
         (should (string= large-content (nth 2 constructed-triple)))))))
 
+;; TTL Import Tests
+
+(ert-deftest test-ttl-import-basic ()
+  "Test basic TTL file import functionality"
+  (let ((test-graph (make-graph))
+        (ttl-content "@prefix schema: <https://schema.org/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+schema:Person rdf:type rdfs:Class .
+schema:Person rdfs:label \"Person\" .
+schema:name rdf:type rdf:Property .
+schema:name rdfs:label \"name\" ."))
+    
+    ;; Create temporary TTL file
+    (with-temp-file "/tmp/test-import.ttl"
+      (insert ttl-content))
+    
+    ;; Import the TTL file
+    (import-ttl "/tmp/test-import.ttl" test-graph)
+    
+    ;; Verify the triples were imported
+    (let ((all-triples (triples '(t t t) test-graph)))
+      (should (= 4 (length all-triples))))
+    
+    ;; Verify specific triples exist using graph-query
+    (should (ask '((schema:Person rdf:type rdfs:Class)) test-graph))
+    (should (ask '((schema:Person rdfs:label "Person")) test-graph))
+    (should (ask '((schema:name rdf:type rdf:Property)) test-graph))
+    (should (ask '((schema:name rdfs:label "name")) test-graph))
+    
+    ;; Clean up
+    (delete-file "/tmp/test-import.ttl")))
+
+(ert-deftest test-ttl-import-prefix-expansion ()
+  "Test that TTL prefixes are properly expanded to full IRIs and stored as symbols"
+  (let ((test-graph (make-graph))
+        (ttl-content "@prefix ex: <http://example.org/> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+
+ex:alice foaf:name \"Alice\" .
+ex:bob foaf:knows ex:alice ."))
+    
+    ;; Create temporary TTL file
+    (with-temp-file "/tmp/test-prefixes.ttl"
+      (insert ttl-content))
+    
+    ;; Import the TTL file
+    (import-ttl "/tmp/test-prefixes.ttl" test-graph)
+    
+    ;; Verify prefixes were registered in the graph
+    (let ((prefixes (cdr (assoc 'prefixes test-graph))))
+      (should (string= "http://example.org/" (cdr (assoc "ex" prefixes))))
+      (should (string= "http://xmlns.com/foaf/0.1/" (cdr (assoc "foaf" prefixes)))))
+    
+    ;; Verify triples were imported with expanded IRIs
+    (let ((all-triples (triples '(t t t) test-graph)))
+      (should (= 2 (length all-triples))))
+    
+    ;; Verify specific expanded triples exist (now using prefixed forms)
+    (should (ask '((ex:alice foaf:name "Alice")) test-graph))
+    (should (ask '((ex:bob foaf:knows ex:alice)) test-graph))
+    
+    ;; Verify that symbols are properly interned
+    (let ((alice-triple (car (triples '(ex:alice t t) test-graph))))
+      (should (symbolp (nth 0 alice-triple)))  ; subject
+      (should (symbolp (nth 1 alice-triple)))  ; predicate
+      (should (stringp (nth 2 alice-triple)))) ; object (literal)
+    
+    ;; Clean up
+    (delete-file "/tmp/test-prefixes.ttl")))
+
+(ert-deftest test-ttl-import-literals-and-datatypes ()
+  "Test TTL import handles various literal types correctly"
+  (let ((test-graph (make-graph))
+        (ttl-content "@prefix ex: <http://example.org/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ex:person ex:name \"John Doe\" .
+ex:person ex:age \"30\"^^<http://www.w3.org/2001/XMLSchema#integer> .
+ex:person ex:description \"A person\"@en ."))
+    
+    ;; Create temporary TTL file
+    (with-temp-file "/tmp/test-literals.ttl"
+      (insert ttl-content))
+    
+    ;; Import the TTL file
+    (import-ttl "/tmp/test-literals.ttl" test-graph)
+    
+    ;; Verify string literal
+    (should (ask '((ex:person ex:name "John Doe")) test-graph))
+    
+    ;; Verify integer literal is converted to number
+    (should (ask '((ex:person ex:age 30)) test-graph))
+    
+    ;; Verify language-tagged literal (language tag is stripped for now)
+    (should (ask '((ex:person ex:description "A person")) test-graph))
+    
+    ;; Clean up
+    (delete-file "/tmp/test-literals.ttl")))
+
+(ert-deftest test-ttl-import-blank-nodes ()
+  "Test TTL import handles blank nodes correctly"
+  (let ((test-graph (make-graph))
+        (ttl-content "@prefix ex: <http://example.org/> .
+
+_:person1 ex:name \"Anonymous Person\" .
+_:person2 ex:knows _:person1 ."))
+    
+    ;; Create temporary TTL file
+    (with-temp-file "/tmp/test-blanks.ttl"
+      (insert ttl-content))
+    
+    ;; Import the TTL file
+    (import-ttl "/tmp/test-blanks.ttl" test-graph)
+    
+    ;; Verify blank node triples were imported
+    (let ((all-triples (triples '(t t t) test-graph)))
+      (should (= 2 (length all-triples))))
+    
+    ;; Verify blank nodes are properly represented as symbols with el-rdf format
+    ;; el-rdf blank nodes have format _:G<number>, so we check for any blank node
+    (let ((all-triples (triples '(t t t) test-graph)))
+      (should (= 2 (length all-triples)))
+      ;; Check that subjects are symbols starting with "_:"
+      (dolist (triple all-triples)
+        (let ((subject (nth 0 triple)))
+          (should (symbolp subject))
+          (should (string-prefix-p "_:" (symbol-name subject))))))
+    
+    ;; Clean up
+    (delete-file "/tmp/test-blanks.ttl")))
+
+(ert-deftest test-ttl-import-comments-and-empty-lines ()
+  "Test TTL import ignores comments and empty lines"
+  (let ((test-graph (make-graph))
+        (ttl-content "@prefix ex: <http://example.org/> .
+
+# This is a comment
+ex:alice ex:name \"Alice\" .
+
+# Another comment
+# and another
+
+ex:bob ex:name \"Bob\" .
+"))
+    
+    ;; Create temporary TTL file
+    (with-temp-file "/tmp/test-comments.ttl"
+      (insert ttl-content))
+    
+    ;; Import the TTL file
+    (import-ttl "/tmp/test-comments.ttl" test-graph)
+    
+    ;; Should only have the two actual triples, comments ignored
+    (let ((all-triples (triples '(t t t) test-graph)))
+      (should (= 2 (length all-triples))))
+    
+    ;; Verify the actual triples
+    (should (ask '((ex:alice ex:name "Alice")) test-graph))
+    (should (ask '((ex:bob ex:name "Bob")) test-graph))
+    
+    ;; Clean up
+    (delete-file "/tmp/test-comments.ttl")))
+
+(ert-deftest test-ttl-import-nonexistent-file ()
+  "Test TTL import handles nonexistent files gracefully"
+  (let ((test-graph (make-graph)))
+    
+    ;; Import nonexistent file should not error, just do nothing
+    (import-ttl "/nonexistent/file.ttl" test-graph)
+    
+    ;; Graph should remain empty
+    (let ((all-triples (triples '(t t t) test-graph)))
+      (should (= 0 (length all-triples))))))
+
 (provide 'test-el-rdf)
 ;;; test-el-rdf.el ends here

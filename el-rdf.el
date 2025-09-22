@@ -4,7 +4,7 @@
 
 ;; Author: Ian FitzPatrick ian@ianfitzpatrick.eu
 ;; URL: codeberg.org/ifitzpat/el-rdf
-;; Version: 0.1.3
+;; Version: 0.2.0
 ;; Package-Requires: ((emacs "27.1")(request)(dash "20250312.1307"))
 ;; Keywords: rdf triple-store
 
@@ -30,7 +30,7 @@
 ;;; Code:
 (require 'dash)
 (require 'cl-seq)
-(require 'uuidgen)
+;; (require 'uuidgen)  ; Commented out for testing
 
 ;; Increase macro expansion limits to handle large datasets
 (setq max-lisp-eval-depth 5000)
@@ -77,16 +77,19 @@ Each entry is (graph . (name . last-checkpoint-time)).")
   (and (stringp obj) (string-prefix-p "file:" obj)))
 
 (defun el-rdf--store-large-content (content)
-  "Store large CONTENT to cache file and return reference string."
+  "Store large CONTENT to cache file and return reference string.
+Uses MD5 hash of content as filename for deduplication."
   (when (and el-rdf-max-string-length
              (stringp content)
              (> (length content) el-rdf-max-string-length))
-    (let* ((uuid (uuidgen-1))
-           (filename (format "content-%s.txt" uuid))
+    (let* ((content-hash (secure-hash 'md5 content))
+           (filename (format "content-%s.txt" content-hash))
            (filepath (expand-file-name filename (el-rdf--get-cache-dir)))
            (reference (format "file:%s" filename)))
-      (with-temp-file filepath
-        (insert content))
+      ;; Only write file if it doesn't already exist (deduplication)
+      (unless (file-exists-p filepath)
+        (with-temp-file filepath
+          (insert content)))
       reference)))
 
 (defun el-rdf--resolve-content-reference (reference)
@@ -120,6 +123,7 @@ If NAME is provided, the graph can be easily saved/restored by name."
   	(hooks . ((add-hooks . ,(list))
   	          (delete-hooks . ,(list))
   	          (query-hooks . ,(list))))
+  	(prefixes . ())
   	(name . ,name)))
 
 ;; Helper functions for hook management
@@ -574,8 +578,9 @@ Returns nil if metadata file doesn't exist."
 
 (defun augmented-eq (pattern input)
   (cond ((symbolp pattern) (eq pattern input))
-	((stringp pattern) (string= pattern input))
-	((numberp pattern) (eql pattern input))))
+	((stringp pattern) (and (stringp input) (string= pattern input)))
+	((numberp pattern) (and (numberp input) (eql pattern input)))
+	(t (equal pattern input))))
 
   (defun pat-match (pattern input)
     ;; Note: if done on triples retrieved from an index one third of the comparisons might be redundant
@@ -1061,6 +1066,115 @@ predobj)
   )
  (shell-command (concat "dot /tmp/graph.dot -Tjson > " filename))
  filename)
+
+(defun el-rdf--register-prefix (graph prefix namespace)
+  "Register PREFIX to expand to NAMESPACE in GRAPH."
+  (let ((prefixes (cdr (assoc 'prefixes graph))))
+    (setf (cdr (assoc 'prefixes graph))
+          (cons (cons prefix namespace) prefixes))))
+
+(defun el-rdf--expand-prefixed-iri (graph prefixed-iri)
+  "Expand a prefixed IRI like 'schema:Person' to full IRI using GRAPH prefixes."
+  (if (string-match "^\\([^:]+\\):\\(.+\\)$" prefixed-iri)
+      (let* ((prefix (match-string 1 prefixed-iri))
+             (local-part (match-string 2 prefixed-iri))
+             (prefixes (cdr (assoc 'prefixes graph)))
+             (namespace (cdr (assoc prefix prefixes))))
+        (if namespace
+            (concat namespace local-part)
+          prefixed-iri))
+    prefixed-iri))
+
+(defun el-rdf--intern-rdf-resource (graph resource-string)
+  "Convert RDF resource string to symbol, keeping prefixed form."
+  ;; Keep the original prefixed form as the symbol name for readability
+  (intern resource-string))
+
+(defun el-rdf--parse-ttl-value (graph value-string)
+  "Parse a TTL value (IRI, literal, blank node) into appropriate Lisp form."
+  (cond
+   ((string-prefix-p "<" value-string)
+    (let ((iri (substring value-string 1 -1)))
+      (intern iri)))
+   ((string-prefix-p "\"" value-string)
+    (if (string-match "\"\\(.*?\\)\"\\(@\\([a-zA-Z-]+\\)\\|\\^\\^<\\(.+\\)>\\)?" value-string)
+        (let ((literal-value (match-string 1 value-string))
+              (lang (match-string 3 value-string))
+              (datatype (match-string 4 value-string)))
+          (cond
+           (datatype
+            (if (string= datatype "http://www.w3.org/2001/XMLSchema#integer")
+                (string-to-number literal-value)
+              literal-value))
+           (lang
+            ;; TODO: Add proper language tag support to el-rdf
+            ;; For now, strip language tags and return just the literal value
+            literal-value)
+           (t literal-value)))
+      value-string))
+   ((string-prefix-p "_:" value-string)
+    ;; Use el-rdf's bnode function for consistent blank node format
+    (bnode))
+   ((string-match ":" value-string)
+    (el-rdf--intern-rdf-resource graph value-string))
+   (t
+    (intern value-string))))
+
+(defun el-rdf--tokenize-ttl-line (line)
+  "Tokenize a TTL line into subject, predicate, object tokens."
+  (let ((line (string-trim line))
+        tokens)
+    (when (and (> (length line) 0)
+               (not (string-prefix-p "#" line)))
+      (let ((parts (split-string line "[ \t]+" t)))
+        (when (>= (length parts) 3)
+          (let* ((subject (nth 0 parts))
+                 (predicate (nth 1 parts))
+                 (object-parts (nthcdr 2 parts))
+                 (object (string-join object-parts " ")))
+            (when (string-suffix-p " ." object)
+              (setq object (substring object 0 -2)))
+            (when (string-suffix-p "." object)
+              (setq object (substring object 0 -1)))
+            (list subject predicate object)))))))
+
+(defun el-rdf--parse-ttl-content (graph content)
+  "Parse TTL content string and add triples to GRAPH."
+  (let ((lines (split-string content "\n" t)))
+    (dolist (line lines)
+      (let ((line (string-trim line)))
+        (cond
+         ((string-prefix-p "@prefix" line)
+          (when (string-match "@prefix \\([^:]+\\): <\\(.+\\)> \\." line)
+            (let ((prefix (match-string 1 line))
+                  (namespace (match-string 2 line)))
+              (el-rdf--register-prefix graph prefix namespace))))
+         ((and (> (length line) 0)
+               (not (string-prefix-p "#" line)))
+          (let ((tokens (el-rdf--tokenize-ttl-line line)))
+            (when tokens
+              (let* ((subject-str (nth 0 tokens))
+                     (predicate-str (nth 1 tokens))
+                     (object-str (nth 2 tokens))
+                     (subject (el-rdf--parse-ttl-value graph subject-str))
+                     (predicate (el-rdf--parse-ttl-value graph predicate-str))
+                     (object (el-rdf--parse-ttl-value graph object-str))
+                     ;; Normalize rdf:type predicate to 'rdf:type symbol for consistency
+                     (predicate (if (and (symbolp predicate)
+                                         (string= (symbol-name predicate)
+                                                  "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"))
+                                    'rdf:type
+                                  predicate)))
+                (add-triple (list subject predicate object) graph))))))))))
+
+(defun import-ttl (filename graph)
+  "Import TTL file FILENAME into GRAPH, expanding prefixes to symbols."
+  (when (file-exists-p filename)
+    (with-temp-buffer
+      (insert-file-contents filename)
+      (el-rdf--parse-ttl-content graph (buffer-string)))
+    (message "Imported TTL file: %s" filename)
+    graph))
 
 (provide 'el-rdf)
 ;;; el-rdf.el ends here
