@@ -506,6 +506,63 @@ Returns nil if metadata file doesn't exist."
         ;; Resolve content references in all returned triples
         (el-rdf--resolve-triple-objects raw-results))))
 
+(defun raw-triples (pattern graph)
+  "Like triples, but returns raw data without resolving content references.
+Used for checkpointing to preserve file references."
+  (let ((s (nth 0 pattern))
+	(p (nth 1 pattern))
+	(o (nth 2 pattern)))
+    (cond
+     ((not (var-or-wild? s))
+      (let ((results (expand-duals (gethash s (cdr (assoc 'spo graph))) s)))
+	(if (eq p 'rdf:type)
+            (transform-a-results-to-rdf-type results)
+	  results)))
+     ((not (var-or-wild? p))
+      (if (eq p 'rdf:type)
+          (let ((a-results (expand-duals (gethash 'a (cdr (assoc 'pos graph))) 'a 'pos)))
+	    (transform-a-results-to-rdf-type a-results))
+        (expand-duals (gethash p (cdr (assoc 'pos graph))) p 'pos)))
+     ((not (var-or-wild? o))
+      (let ((results (expand-duals (gethash o (cdr (assoc 'osp graph))) o 'osp)))
+	(if (eq p 'rdf:type)
+            (transform-a-results-to-rdf-type results)
+	  results)))
+     (t
+      (let ((result '())
+            (spo-table (cdr (assoc 'spo graph)))
+            (batch-size 50)
+            (processed-count 0))
+        (if (fboundp 'hash-table-keys)
+            (let ((all-keys (hash-table-keys spo-table)))
+              (while all-keys
+                (let ((batch-keys (cl-subseq all-keys 0 (min batch-size (length all-keys)))))
+                  (dolist (key batch-keys)
+                    (let ((value (gethash key spo-table)))
+                      (setq result (append (expand-duals value key) result))
+                      (setq processed-count (1+ processed-count))))
+                  (setq all-keys (nthcdr (min batch-size (length all-keys)) all-keys))
+                  (when all-keys
+                    (sit-for 0.001)))))
+          (let ((all-keys '())
+                (temp-key nil)
+                (temp-value nil))
+            (maphash (lambda (k v)
+                       (setq temp-key k)
+                       (setq temp-value v)
+                       (push temp-key all-keys))
+                     spo-table)
+            (while all-keys
+              (let ((batch-keys (cl-subseq all-keys 0 (min batch-size (length all-keys)))))
+                (dolist (key batch-keys)
+                  (let ((value (gethash key spo-table)))
+                    (setq result (append (expand-duals value key) result))
+                    (setq processed-count (1+ processed-count))))
+                (setq all-keys (nthcdr (min batch-size (length all-keys)) all-keys))
+                (when all-keys
+                  (sit-for 0.001))))))
+        result)))))
+
 (defun triples-to-string (trips)
   "Convert a list of TRIPS to string while preserving nil values and empty strings."
   (concat
@@ -527,8 +584,9 @@ Returns nil if metadata file doesn't exist."
    ")"))
 
 (defun save-graph (graph filename)
+  "Save GRAPH to FILENAME, preserving file references for large content."
   (let
-      ((full-graph (triples '(t t t) graph)))
+      ((full-graph (raw-triples '(t t t) graph)))
     (with-current-buffer
 	(get-buffer-create (find-file-noselect filename))
         (erase-buffer)
