@@ -740,6 +740,13 @@ Used for checkpointing to preserve file references."
     (let ((query-hooks (cdr (assoc 'query-hooks (cdr (assoc 'hooks graph))))))
       (mapc (lambda (hook) (funcall hook graph 'graph-query clauses))
             query-hooks))
+    ;; Normalize all results to ensure consistent binding structure
+    (let ((raw-results (el-rdf--graph-query-internal clauses graph bindings)))
+      (if raw-results
+          (el-rdf--normalize-binding-results raw-results)
+        raw-results)))
+
+  (defun el-rdf--graph-query-internal (clauses graph &optional bindings)
     "Execute a SPARQL-like query against a graph, supporting OPTIONAL clauses.
 
 CLAUSES is a list of triple patterns, e.g., '(($s rdf:type foaf:Person) ($s foaf:name $name))
@@ -824,7 +831,7 @@ EXECUTION PATHS:
   		 (error (format "The graph pattern %s doesn't match" unwrapped-pattern))
   	       (if (cdr clauses)
   		   ;; More clauses to process
-  		   (graph-query (cdr clauses) graph (update-bindings nil (or bindings '())))
+  		   (el-rdf--graph-query-internal (cdr clauses) graph (update-bindings nil (or bindings '())))
   		 ;; Single clause - wrap each binding in a list for consistency
   		 (if bindings (mapcar #'list bindings) '())))))
   	  ;; MULTIPLE BINDING BRANCHES: Split execution per branch, combine results
@@ -849,9 +856,9 @@ EXECUTION PATHS:
   		(if (or (not newbindings)(not updated-bindings))
   		    (if is-optional
 			;; For optional clauses that fail, continue with existing bindings
-			(graph-query (cdr clauses) graph (list binding-branch))
+			(el-rdf--graph-query-internal (cdr clauses) graph (list binding-branch))
 		      nil)
-  		  (graph-query
+  		  (el-rdf--graph-query-internal
   		   (cl-sublis updated-bindings (cdr clauses))
   		   graph
   		   updated-bindings)
@@ -872,9 +879,9 @@ EXECUTION PATHS:
   	     (if (or (not newbindings)(not updated-bindings) )
   		 (if is-optional
 		     ;; For optional clauses that fail, continue with existing bindings
-		     (graph-query (cdr clauses) graph bindings)
+		     (el-rdf--graph-query-internal (cdr clauses) graph bindings)
 		   nil) 	   ; if nil then return nil
-  	       (let ((result (graph-query (cl-sublis updated-bindings (cdr clauses)) graph updated-bindings)))
+  	       (let ((result (el-rdf--graph-query-internal (cl-sublis updated-bindings (cdr clauses)) graph updated-bindings)))
   		 ;; For single-branch queries, ensure result has same structure as single-clause queries
   		 ;; Single-clause queries return: (((bindings)))
   		 ;; But single-branch multi-clause can return: ((bindings))
@@ -901,6 +908,65 @@ EXECUTION PATHS:
 ;; maybe it returns a lambda that can be applied to graph
 ;; and maybe it takes an optional FILTER function that is applied to the result of the graph-query
 ;; the construct, select, ask functions should then apply the where function to the graph
+
+;; Binding structure normalization utilities
+
+(defun el-rdf--detect-binding-nesting-level (binding-structure)
+  "Recursively detect how many levels of nesting exist before reaching a binding pair.
+A binding pair is a cons cell where the car is a symbol (variable like $s).
+Returns the nesting level as an integer."
+  (cond
+   ;; Base case 1: nil or empty
+   ((null binding-structure) 0)
+   ;; Base case 2: This is a binding pair ($var . value)
+   ((and (consp binding-structure)
+         (symbolp (car binding-structure))
+         (not (listp (cdr binding-structure))))
+    0)
+   ;; Base case 3: This is a list of binding pairs (($var . value) ...)
+   ((and (listp binding-structure)
+         (consp (car binding-structure))
+         (symbolp (caar binding-structure))
+         (not (listp (cdar binding-structure))))
+    0)
+   ;; Recursive case: go one level deeper
+   ((listp binding-structure)
+    (1+ (el-rdf--detect-binding-nesting-level (car binding-structure))))
+   ;; Fallback
+   (t 0)))
+
+(defun el-rdf--normalize-binding-structure (binding-structure target-level)
+  "Normalize binding structure to the target nesting level.
+TARGET-LEVEL 0 = binding pairs: (($s . value) ($p . value))
+TARGET-LEVEL 1 = binding sets: ((($s . value) ($p . value)))
+TARGET-LEVEL 2 = binding collections: (((($s . value) ($p . value))))
+etc."
+  (let ((current-level (el-rdf--detect-binding-nesting-level binding-structure)))
+    (cond
+     ;; Already at target level
+     ((= current-level target-level)
+      binding-structure)
+     ;; Need to unwrap (current > target)
+     ((> current-level target-level)
+      (let ((unwrapped binding-structure))
+        (dotimes (_ (- current-level target-level))
+          (setq unwrapped (if (listp unwrapped) (car unwrapped) unwrapped)))
+        unwrapped))
+     ;; Need to wrap (current < target)
+     ((< current-level target-level)
+      (let ((wrapped binding-structure))
+        (dotimes (_ (- target-level current-level))
+          (setq wrapped (list wrapped)))
+        wrapped))
+     ;; Fallback
+     (t binding-structure))))
+
+(defun el-rdf--normalize-binding-results (binding-results)
+  "Normalize all binding results to the expected level 1 format: (bindings).
+This ensures consistent output from graph-query regardless of execution path."
+  (mapcar (lambda (binding-result)
+            (el-rdf--normalize-binding-structure binding-result 1))
+          binding-results))
 
 (defalias 'where 'graph-query)
 
