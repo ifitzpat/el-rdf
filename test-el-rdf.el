@@ -45,6 +45,298 @@
 	 (member (list 'bob) result))
       )))
 
+;; Hook test helpers
+(defvar test-hook-calls nil "Track hook calls for testing")
+
+(defun test-add-hook (graph operation data)
+  "Test hook that records add operations"
+  (push (list :add operation (length data)) test-hook-calls))
+
+(defun test-delete-hook (graph operation data)
+  "Test hook that records delete operations"
+  (push (list :delete operation (length data)) test-hook-calls))
+
+(defun test-query-hook (graph operation data)
+  "Test hook that records query operations"
+  (push (list :query operation (length data)) test-hook-calls))
+
+(ert-deftest test-hook-management ()
+  "Test adding and removing hooks from graphs"
+  (let ((test-graph (make-graph)))
+    ;; Initially no hooks
+    (should (null (get-graph-hooks test-graph 'add-hooks)))
+    (should (null (get-graph-hooks test-graph 'delete-hooks)))
+    (should (null (get-graph-hooks test-graph 'query-hooks)))
+    
+    ;; Add hooks
+    (add-hook-to-graph test-graph 'add-hooks #'test-add-hook)
+    (add-hook-to-graph test-graph 'delete-hooks #'test-delete-hook)
+    (add-hook-to-graph test-graph 'query-hooks #'test-query-hook)
+    
+    ;; Verify hooks were added
+    (should (member #'test-add-hook (get-graph-hooks test-graph 'add-hooks)))
+    (should (member #'test-delete-hook (get-graph-hooks test-graph 'delete-hooks)))
+    (should (member #'test-query-hook (get-graph-hooks test-graph 'query-hooks)))
+    
+    ;; Remove hooks
+    (remove-hook-from-graph test-graph 'add-hooks #'test-add-hook)
+    (remove-hook-from-graph test-graph 'delete-hooks #'test-delete-hook)
+    (remove-hook-from-graph test-graph 'query-hooks #'test-query-hook)
+    
+    ;; Verify hooks were removed
+    (should (null (get-graph-hooks test-graph 'add-hooks)))
+    (should (null (get-graph-hooks test-graph 'delete-hooks)))
+    (should (null (get-graph-hooks test-graph 'query-hooks)))))
+
+(ert-deftest test-add-hooks-execution ()
+  "Test that add-hooks are called during add-triples operations"
+  (setq test-hook-calls nil)
+  (let ((test-graph (make-graph)))
+    ;; Add hook
+    (add-hook-to-graph test-graph 'add-hooks #'test-add-hook)
+    
+    ;; Perform add-triples operation
+    (add-triples '((alice friend bob) (bob friend charlie)) test-graph)
+    
+    ;; Verify hook was called
+    (should (equal test-hook-calls '((:add add-triples 2))))
+    
+    ;; Add more triples
+    (setq test-hook-calls nil)
+    (add-triples '((charlie friend alice)) test-graph)
+    
+    ;; Verify hook was called again
+    (should (equal test-hook-calls '((:add add-triples 1))))))
+
+(ert-deftest test-delete-hooks-execution ()
+  "Test that delete-hooks are called during delete-triples operations"
+  (setq test-hook-calls nil)
+  (let ((test-graph (make-graph)))
+    ;; Add some data first
+    (add-triples '((alice friend bob) (bob friend charlie)) test-graph)
+    
+    ;; Add hook
+    (add-hook-to-graph test-graph 'delete-hooks #'test-delete-hook)
+    
+    ;; Perform delete-triples operation
+    (delete-triples '((alice friend bob)) test-graph)
+    
+    ;; Verify hook was called
+    (should (equal test-hook-calls '((:delete delete-triples 1))))))
+
+(ert-deftest test-query-hooks-execution ()
+  "Test that query-hooks are called during graph-query operations"
+  (setq test-hook-calls nil)
+  (let ((test-graph (make-graph)))
+    ;; Add some data
+    (add-triples '((alice friend bob) (bob friend charlie)) test-graph)
+    
+    ;; Add hook
+    (add-hook-to-graph test-graph 'query-hooks #'test-query-hook)
+    
+    ;; Perform query operation
+    (graph-query '(($x friend $y)) test-graph)
+    
+    ;; Verify hook was called
+    (should (equal test-hook-calls '((:query graph-query 1))))))
+
+(ert-deftest test-multiple-hooks-same-type ()
+  "Test that multiple hooks of the same type are all executed"
+  (setq test-hook-calls nil)
+  (let ((test-graph (make-graph))
+        (hook2-calls nil))
+    ;; Define second hook that uses local variable
+    (let ((local-hook2-calls hook2-calls))
+      (fset 'test-add-hook2 
+            (lambda (graph operation data)
+              (setq local-hook2-calls (cons (list :add2 operation (length data)) local-hook2-calls))))
+      
+      ;; Add both hooks
+      (add-hook-to-graph test-graph 'add-hooks #'test-add-hook)
+      (add-hook-to-graph test-graph 'add-hooks #'test-add-hook2)
+      
+      ;; Perform operation
+      (add-triples '((alice friend bob)) test-graph)
+      
+      ;; Verify both hooks were called
+      (should (equal test-hook-calls '((:add add-triples 1))))
+      (should (equal local-hook2-calls '((:add2 add-triples 1))))
+      
+      ;; Clean up the global function
+      (fmakunbound 'test-add-hook2))))
+
+(ert-deftest test-hooks-do-not-affect-individual-operations ()
+  "Test that individual add-triple and delete-triple do not call hooks"
+  (setq test-hook-calls nil)
+  (let ((test-graph (make-graph)))
+    ;; Add hooks
+    (add-hook-to-graph test-graph 'add-hooks #'test-add-hook)
+    (add-hook-to-graph test-graph 'delete-hooks #'test-delete-hook)
+    
+    ;; Perform individual operations
+    (add-triple '(alice friend bob) test-graph)
+    (delete-triple '(alice friend bob) test-graph)
+    
+    ;; Verify hooks were NOT called
+    (should (null test-hook-calls))))
+
+(ert-deftest test-hook-prevents-duplicates ()
+  "Test that adding the same hook twice doesn't create duplicates"
+  (let ((test-graph (make-graph)))
+    ;; Add same hook twice
+    (add-hook-to-graph test-graph 'add-hooks #'test-add-hook)
+    (add-hook-to-graph test-graph 'add-hooks #'test-add-hook)
+    
+    ;; Should only appear once
+    (should (= 1 (length (get-graph-hooks test-graph 'add-hooks))))
+    (should (member #'test-add-hook (get-graph-hooks test-graph 'add-hooks)))))
+
+;; Checkpointing tests
+(defvar test-checkpoint-dir "/tmp/test-el-rdf-checkpoints"
+  "Test directory for checkpoints.")
+
+(defun test-cleanup-checkpoints ()
+  "Clean up test checkpoint files."
+  (when (file-exists-p test-checkpoint-dir)
+    (delete-directory test-checkpoint-dir t)))
+
+(ert-deftest test-checkpoint-directory ()
+  "Test XDG cache directory creation and usage."
+  (let ((el-rdf-checkpoint-dir test-checkpoint-dir))
+    (test-cleanup-checkpoints)
+    
+    ;; Directory should be created when first accessed
+    (should-not (file-exists-p test-checkpoint-dir))
+    (let ((dir (el-rdf--get-checkpoint-dir)))
+      (should (string= dir test-checkpoint-dir))
+      (should (file-exists-p test-checkpoint-dir)))
+    
+    ;; Clean up
+    (test-cleanup-checkpoints)))
+
+(ert-deftest test-checkpoint-registration ()
+  "Test graph registration for checkpointing."
+  (let ((test-graph (make-graph))
+        (el-rdf-checkpoint-dir test-checkpoint-dir))
+    (test-cleanup-checkpoints)
+    
+    ;; Register graph for checkpointing
+    (el-rdf-register-graph-for-checkpointing test-graph "test-graph")
+    
+    ;; Check that graph is registered
+    (should (gethash test-graph el-rdf-graph-checkpoints))
+    (should (string= "test-graph" (car (gethash test-graph el-rdf-graph-checkpoints))))
+    
+    ;; Check that checkpoint hook was added
+    (should (member #'el-rdf-checkpoint-hook (get-graph-hooks test-graph 'add-hooks)))
+    
+    ;; Clean up
+    (test-cleanup-checkpoints)
+    (remhash test-graph el-rdf-graph-checkpoints)))
+
+(ert-deftest test-automatic-checkpointing ()
+  "Test that graphs are automatically checkpointed on add-triples."
+  (let ((test-graph (make-graph))
+        (el-rdf-checkpoint-dir test-checkpoint-dir))
+    (test-cleanup-checkpoints)
+    
+    ;; Register graph for checkpointing
+    (el-rdf-register-graph-for-checkpointing test-graph "test-auto-checkpoint")
+    
+    ;; Add triples (should trigger checkpoint)
+    (add-triples '((alice friend bob) (bob friend charlie)) test-graph)
+    
+    ;; Check that checkpoint file was created
+    (should (file-exists-p (el-rdf-checkpoint-file-path "test-auto-checkpoint")))
+    
+    ;; Clean up
+    (test-cleanup-checkpoints)
+    (remhash test-graph el-rdf-graph-checkpoints)))
+
+(ert-deftest test-checkpoint-recovery ()
+  "Test recovering graphs from checkpoints."
+  (let ((test-graph (make-graph))
+        (el-rdf-checkpoint-dir test-checkpoint-dir))
+    (test-cleanup-checkpoints)
+    
+    ;; Create and checkpoint a graph with data
+    (add-triples '((alice friend bob) (bob friend charlie) (alice age 30)) test-graph)
+    (el-rdf-register-graph-for-checkpointing test-graph "test-recovery")
+    (add-triples '((charlie friend alice)) test-graph) ; This triggers checkpoint
+    
+    ;; Recover the graph
+    (let ((recovered-graph (el-rdf-recover-from-checkpoint "test-recovery")))
+      ;; Check that all data was recovered
+      (should (= 4 (length (triples '(t t t) recovered-graph))))
+      ;; Check that each expected triple exists
+      (let ((recovered-triples (triples '(t t t) recovered-graph)))
+        (should (member '(alice friend bob) recovered-triples))
+        (should (member '(bob friend charlie) recovered-triples))
+        (should (member '(alice age 30) recovered-triples))
+        (should (member '(charlie friend alice) recovered-triples))))
+    
+    ;; Clean up
+    (test-cleanup-checkpoints)
+    (remhash test-graph el-rdf-graph-checkpoints)))
+
+(ert-deftest test-checkpoint-file-path ()
+  "Test checkpoint file path generation."
+  (let ((el-rdf-checkpoint-dir test-checkpoint-dir))
+    (test-cleanup-checkpoints)
+    
+    (let ((path (el-rdf-checkpoint-file-path "my-graph")))
+      (should (string-suffix-p "/my-graph.checkpoint" path))
+      (should (string-prefix-p test-checkpoint-dir path)))
+    
+    (test-cleanup-checkpoints)))
+
+(ert-deftest test-list-checkpoints ()
+  "Test listing available checkpoint files."
+  (let ((el-rdf-checkpoint-dir test-checkpoint-dir))
+    (test-cleanup-checkpoints)
+    
+    ;; Initially no checkpoints
+    (should (null (el-rdf-list-checkpoints)))
+    
+    ;; Create some test graphs and checkpoints
+    (let ((graph1 (make-graph))
+          (graph2 (make-graph)))
+      (add-triples '((alice friend bob)) graph1)
+      (add-triples '((charlie friend dave)) graph2)
+      
+      (el-rdf-register-graph-for-checkpointing graph1 "graph-one")
+      (el-rdf-register-graph-for-checkpointing graph2 "graph-two")
+      
+      ;; Trigger checkpoints
+      (add-triples '((bob friend charlie)) graph1)
+      (add-triples '((dave friend alice)) graph2)
+      
+      ;; List checkpoints
+      (let ((checkpoints (el-rdf-list-checkpoints)))
+        (should (= 2 (length checkpoints)))
+        (should (member "graph-one.checkpoint" checkpoints))
+        (should (member "graph-two.checkpoint" checkpoints)))
+      
+      ;; Clean up
+      (remhash graph1 el-rdf-graph-checkpoints)
+      (remhash graph2 el-rdf-graph-checkpoints))
+    
+    (test-cleanup-checkpoints)))
+
+(ert-deftest test-checkpoint-no-hooks-without-registration ()
+  "Test that graphs without checkpoint registration don't get checkpointed."
+  (let ((test-graph (make-graph))
+        (el-rdf-checkpoint-dir test-checkpoint-dir))
+    (test-cleanup-checkpoints)
+    
+    ;; Add triples without registering for checkpointing
+    (add-triples '((alice friend bob) (bob friend charlie)) test-graph)
+    
+    ;; No checkpoint should be created
+    (should (null (el-rdf-list-checkpoints)))
+    
+    (test-cleanup-checkpoints)))
+
 (ert-deftest test-filter ()
   "Test the filter function with multiple bindings of $b"
   (let* ((test-graph (make-graph))
@@ -627,6 +919,217 @@
       (let ((constructed-triple (car constructed)))
         ;; The constructed triple should have resolved content
         (should (string= large-content (nth 2 constructed-triple)))))))
+
+;; TTL Import Tests
+
+(ert-deftest test-ttl-import-basic ()
+  "Test basic TTL file import functionality"
+  (let ((test-graph (make-graph))
+        (ttl-content "@prefix schema: <https://schema.org/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+schema:Person rdf:type rdfs:Class .
+schema:Person rdfs:label \"Person\" .
+schema:name rdf:type rdf:Property .
+schema:name rdfs:label \"name\" ."))
+    
+    ;; Create temporary TTL file
+    (with-temp-file "/tmp/test-import.ttl"
+      (insert ttl-content))
+    
+    ;; Import the TTL file
+    (import-ttl "/tmp/test-import.ttl" test-graph)
+    
+    ;; Verify the triples were imported
+    (let ((all-triples (triples '(t t t) test-graph)))
+      (should (= 4 (length all-triples))))
+    
+    ;; Verify specific triples exist using graph-query
+    (should (ask '((schema:Person rdf:type rdfs:Class)) test-graph))
+    (should (ask '((schema:Person rdfs:label "Person")) test-graph))
+    (should (ask '((schema:name rdf:type rdf:Property)) test-graph))
+    (should (ask '((schema:name rdfs:label "name")) test-graph))
+    
+    ;; Clean up
+    (delete-file "/tmp/test-import.ttl")))
+
+(ert-deftest test-ttl-import-prefix-expansion ()
+  "Test that TTL prefixes are properly expanded to full IRIs and stored as symbols"
+  (let ((test-graph (make-graph))
+        (ttl-content "@prefix ex: <http://example.org/> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+
+ex:alice foaf:name \"Alice\" .
+ex:bob foaf:knows ex:alice ."))
+    
+    ;; Create temporary TTL file
+    (with-temp-file "/tmp/test-prefixes.ttl"
+      (insert ttl-content))
+    
+    ;; Import the TTL file
+    (import-ttl "/tmp/test-prefixes.ttl" test-graph)
+    
+    ;; Verify prefixes were registered in the graph
+    (let ((prefixes (cdr (assoc 'prefixes test-graph))))
+      (should (string= "http://example.org/" (cdr (assoc "ex" prefixes))))
+      (should (string= "http://xmlns.com/foaf/0.1/" (cdr (assoc "foaf" prefixes)))))
+    
+    ;; Verify triples were imported with expanded IRIs
+    (let ((all-triples (triples '(t t t) test-graph)))
+      (should (= 2 (length all-triples))))
+    
+    ;; Verify specific expanded triples exist (now using prefixed forms)
+    (should (ask '((ex:alice foaf:name "Alice")) test-graph))
+    (should (ask '((ex:bob foaf:knows ex:alice)) test-graph))
+    
+    ;; Verify that symbols are properly interned
+    (let ((alice-triple (car (triples '(ex:alice t t) test-graph))))
+      (should (symbolp (nth 0 alice-triple)))  ; subject
+      (should (symbolp (nth 1 alice-triple)))  ; predicate
+      (should (stringp (nth 2 alice-triple)))) ; object (literal)
+    
+    ;; Clean up
+    (delete-file "/tmp/test-prefixes.ttl")))
+
+(ert-deftest test-ttl-import-literals-and-datatypes ()
+  "Test TTL import handles various literal types correctly"
+  (let ((test-graph (make-graph))
+        (ttl-content "@prefix ex: <http://example.org/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ex:person ex:name \"John Doe\" .
+ex:person ex:age \"30\"^^<http://www.w3.org/2001/XMLSchema#integer> .
+ex:person ex:description \"A person\"@en ."))
+    
+    ;; Create temporary TTL file
+    (with-temp-file "/tmp/test-literals.ttl"
+      (insert ttl-content))
+    
+    ;; Import the TTL file
+    (import-ttl "/tmp/test-literals.ttl" test-graph)
+    
+    ;; Verify string literal
+    (should (ask '((ex:person ex:name "John Doe")) test-graph))
+    
+    ;; Verify integer literal is converted to number
+    (should (ask '((ex:person ex:age 30)) test-graph))
+    
+    ;; Verify language-tagged literal (language tag is stripped for now)
+    (should (ask '((ex:person ex:description "A person")) test-graph))
+    
+    ;; Clean up
+    (delete-file "/tmp/test-literals.ttl")))
+
+(ert-deftest test-ttl-import-blank-nodes ()
+  "Test TTL import handles blank nodes correctly"
+  (let ((test-graph (make-graph))
+        (ttl-content "@prefix ex: <http://example.org/> .
+
+_:person1 ex:name \"Anonymous Person\" .
+_:person2 ex:knows _:person1 ."))
+    
+    ;; Create temporary TTL file
+    (with-temp-file "/tmp/test-blanks.ttl"
+      (insert ttl-content))
+    
+    ;; Import the TTL file
+    (import-ttl "/tmp/test-blanks.ttl" test-graph)
+    
+    ;; Verify blank node triples were imported
+    (let ((all-triples (triples '(t t t) test-graph)))
+      (should (= 2 (length all-triples))))
+    
+    ;; Verify blank nodes are properly represented as symbols with el-rdf format
+    ;; el-rdf blank nodes have format _:G<number>, so we check for any blank node
+    (let ((all-triples (triples '(t t t) test-graph)))
+      (should (= 2 (length all-triples)))
+      ;; Check that subjects are symbols starting with "_:"
+      (dolist (triple all-triples)
+        (let ((subject (nth 0 triple)))
+          (should (symbolp subject))
+          (should (string-prefix-p "_:" (symbol-name subject))))))
+    
+    ;; Clean up
+    (delete-file "/tmp/test-blanks.ttl")))
+
+(ert-deftest test-ttl-import-comments-and-empty-lines ()
+  "Test TTL import ignores comments and empty lines"
+  (let ((test-graph (make-graph))
+        (ttl-content "@prefix ex: <http://example.org/> .
+
+# This is a comment
+ex:alice ex:name \"Alice\" .
+
+# Another comment
+# and another
+
+ex:bob ex:name \"Bob\" .
+"))
+    
+    ;; Create temporary TTL file
+    (with-temp-file "/tmp/test-comments.ttl"
+      (insert ttl-content))
+    
+    ;; Import the TTL file
+    (import-ttl "/tmp/test-comments.ttl" test-graph)
+    
+    ;; Should only have the two actual triples, comments ignored
+    (let ((all-triples (triples '(t t t) test-graph)))
+      (should (= 2 (length all-triples))))
+    
+    ;; Verify the actual triples
+    (should (ask '((ex:alice ex:name "Alice")) test-graph))
+    (should (ask '((ex:bob ex:name "Bob")) test-graph))
+    
+    ;; Clean up
+    (delete-file "/tmp/test-comments.ttl")))
+
+(ert-deftest test-ttl-import-with-namespace ()
+  "Test TTL import with optional namespace parameter for prefixing resources"
+  (let ((test-graph (make-graph))
+        (ttl-content "@prefix schema: <https://schema.org/> .
+schema:Person rdfs:label \"Person\" .
+:hasOccupation rdfs:label \"has occupation\" .
+someProperty rdfs:label \"some property\" ."))
+    
+    ;; Create temporary TTL file
+    (with-temp-file "/tmp/test-namespace.ttl"
+      (insert ttl-content))
+    
+    ;; Import with namespace "myschema"
+    (import-ttl "/tmp/test-namespace.ttl" test-graph "myschema")
+    
+    ;; Verify all triples were imported
+    (let ((all-triples (triples '(t t t) test-graph)))
+      (should (= 3 (length all-triples))))
+    
+    ;; Verify that resources with existing prefixes are unchanged
+    (should (ask '((schema:Person rdfs:label "Person")) test-graph))
+    
+    ;; Verify that resources starting with : get namespace prefix
+    (should (ask '((myschema:hasOccupation rdfs:label "has occupation")) test-graph))
+    
+    ;; Verify that bare resources get namespace prefix
+    (should (ask '((myschema:someProperty rdfs:label "some property")) test-graph))
+    
+    ;; Verify that the un-prefixed versions are NOT found
+    (should-not (ask '((:hasOccupation rdfs:label "has occupation")) test-graph))
+    (should-not (ask '((someProperty rdfs:label "some property")) test-graph))
+    
+    ;; Clean up
+    (delete-file "/tmp/test-namespace.ttl")))
+
+(ert-deftest test-ttl-import-nonexistent-file ()
+  "Test TTL import handles nonexistent files gracefully"
+  (let ((test-graph (make-graph)))
+    
+    ;; Import nonexistent file should not error, just do nothing
+    (import-ttl "/nonexistent/file.ttl" test-graph)
+    
+    ;; Graph should remain empty
+    (let ((all-triples (triples '(t t t) test-graph)))
+      (should (= 0 (length all-triples))))))
 
 (provide 'test-el-rdf)
 ;;; test-el-rdf.el ends here
