@@ -1334,7 +1334,10 @@ If NAMESPACE is provided, prefix resources with it."
          (t
           (let ((start pos))
             (while (and (< pos len)
-                        (not (memq (aref content pos) '(?\s ?\t ?\n ?\r ?\; ?\. ?\, ?< ?\"))))
+                        (not (memq (aref content pos) '(?\s ?\t ?\n ?\r ?\; ?\, ?< ?\")))
+                        ;; Don't stop at '.' if we're inside a prefixed resource name
+                        (not (and (eq (aref content pos) ?\.)
+                                  (not (string-match-p ":" (substring content start pos))))))
               (setq pos (1+ pos)))
             (when (> pos start)
               (push (substring content start pos) tokens)))))))
@@ -1342,6 +1345,7 @@ If NAMESPACE is provided, prefix resources with it."
 
 (defun el-rdf--parse-simple-ttl-statement (tokens start-pos)
   "Parse a single TTL statement from TOKENS starting at START-POS.
+TOKENS should be a vector for O(1) access.
 Returns (triples . next-pos)."
   (let ((pos start-pos)
         (len (length tokens))
@@ -1349,31 +1353,31 @@ Returns (triples . next-pos)."
         subject)
     (when (< pos len)
       ;; Get subject
-      (setq subject (nth pos tokens))
+      (setq subject (aref tokens pos))
       (setq pos (1+ pos))
 
       ;; Parse predicate-object pairs
       (while (and (< pos len)
-                  (not (equal (nth pos tokens) ".")))
+                  (not (equal (aref tokens pos) ".")))
         (when (< (1+ pos) len) ; Need at least predicate and object
-          (let ((predicate (nth pos tokens)))
+          (let ((predicate (aref tokens pos)))
             (setq pos (1+ pos))
             ;; Parse comma-separated objects for this predicate
             (while (and (< pos len)
-                        (not (member (nth pos tokens) '(";" "."))))
-              (let ((object (nth pos tokens)))
+                        (not (member (aref tokens pos) '(";" "."))))
+              (let ((object (aref tokens pos)))
                 (unless (equal object ",")
                   (push (list subject predicate object) triples))
                 (setq pos (1+ pos))
                 ;; Skip comma if present
-                (when (and (< pos len) (equal (nth pos tokens) ","))
+                (when (and (< pos len) (equal (aref tokens pos) ","))
                   (setq pos (1+ pos)))))
             ;; Skip semicolon if present
-            (when (and (< pos len) (equal (nth pos tokens) ";"))
+            (when (and (< pos len) (equal (aref tokens pos) ";"))
               (setq pos (1+ pos))))))
 
       ;; Skip period if present
-      (when (and (< pos len) (equal (nth pos tokens) "."))
+      (when (and (< pos len) (equal (aref tokens pos) "."))
         (setq pos (1+ pos))))
 
     (cons (nreverse triples) pos)))
@@ -1394,15 +1398,16 @@ can share the same subject, and periods terminate statements."
               (el-rdf--register-prefix graph prefix namespace-uri)))))))
 
   ;; Second pass: parse triples using the new tokenizer
-  (let* ((tokens (el-rdf--simple-tokenize-ttl content))
+  (let* ((token-list (el-rdf--simple-tokenize-ttl content))
+         (tokens (vconcat token-list))  ; Convert to vector for O(1) access
          (pos 0)
          (len (length tokens)))
     (while (< pos len)
-      (let ((token (nth pos tokens)))
+      (let ((token (aref tokens pos)))
         (cond
          ;; Skip @prefix declarations
          ((equal token "@prefix")
-          (while (and (< pos len) (not (equal (nth pos tokens) ".")))
+          (while (and (< pos len) (not (equal (aref tokens pos) ".")))
             (setq pos (1+ pos)))
           (when (< pos len) (setq pos (1+ pos)))) ; Skip period
          ;; Skip comments
@@ -1429,6 +1434,7 @@ can share the same subject, and periods terminate statements."
                                                           "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"))
                                             'rdf:type
                                           predicate)))
+                        ;; Add triple immediately
                         (add-triple (list subject predicate object) graph))))))
               (setq pos next-pos)))))))))
 
