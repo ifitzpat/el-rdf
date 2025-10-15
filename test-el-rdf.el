@@ -1294,5 +1294,48 @@ wn30schema:inSynset  a  owl:ObjectProperty ;
     ;; Clean up
     (delete-file "/tmp/test-language-tags.ttl")))
 
+(ert-deftest test-ttl-uri-compression ()
+  "Test that URIs with parentheses are properly converted to namespace:resource format."
+  (let ((test-graph (make-graph))
+        (test-ttl "@prefix fn15schema: <https://w3id.org/framester/framenet/abox/lu/> .
+@prefix framenet: <http://example.org/framenet/> .
+
+<https://w3id.org/framester/framenet/abox/lu/get_a(n)_eyeful.v> fn15schema:polysemous \"F\" .
+framenet:Resource2 framenet:related <https://w3id.org/framester/framenet/abox/lu/another(test).v> .
+"))
+
+    ;; Parse the TTL content
+    (el-rdf--parse-ttl-content test-graph test-ttl)
+
+    ;; Get all triples
+    (let ((all-triples (triples '(t t t) test-graph)))
+      
+      ;; Should have exactly 2 triples
+      (should (= (length all-triples) 2))
+      
+      ;; Check that no URIs remain uncompressed
+      (let ((malformed-uris (cl-remove-if-not
+                            (lambda (triple)
+                              (or (and (symbolp (nth 0 triple))
+                                       (string-match "https://w3id.org" (symbol-name (nth 0 triple))))
+                                  (and (symbolp (nth 2 triple))
+                                       (string-match "https://w3id.org" (symbol-name (nth 2 triple))))))
+                            all-triples)))
+        (should (= (length malformed-uris) 0)))
+      
+      ;; Verify specific compressed symbols exist
+      (should (ask '((fn15schema:get_a\(n\)_eyeful.v fn15schema:polysemous "F")) test-graph))
+      (should (ask '((framenet:Resource2 framenet:related fn15schema:another\(test\).v)) test-graph))
+      
+      ;; Verify the symbols contain parentheses as expected
+      (let ((symbols-with-parens (cl-remove-if-not
+                                  (lambda (triple)
+                                    (or (and (symbolp (nth 0 triple))
+                                             (string-match "(" (symbol-name (nth 0 triple))))
+                                        (and (symbolp (nth 2 triple))
+                                             (string-match "(" (symbol-name (nth 2 triple))))))
+                                  all-triples)))
+        (should (= (length symbols-with-parens) 2))))))
+
 (provide 'test-el-rdf)
 ;;; test-el-rdf.el ends here

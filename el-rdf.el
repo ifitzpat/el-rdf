@@ -1251,8 +1251,20 @@ If NAMESPACE is provided, prefix resources with it."
     'a)
    ;; Handle angle bracket IRIs
    ((string-prefix-p "<" value-string)
-    (let ((iri (substring value-string 1 -1)))
-      (intern iri)))
+    (let ((iri (substring value-string 1 -1))
+          (prefixes (cdr (assoc 'prefixes graph))))
+      ;; Try to convert URI to prefixed form
+      (let ((compressed-iri nil))
+        (dolist (prefix-entry prefixes)
+          (let* ((prefix (car prefix-entry))
+                 (namespace-uri (cdr prefix-entry)))
+            (when (and (string-prefix-p namespace-uri iri)
+                       (or (null compressed-iri)
+                           ;; Prefer longer namespace matches
+                           (> (length namespace-uri) 
+                              (length (cdr (assoc (substring compressed-iri 0 (string-match ":" compressed-iri)) prefixes))))))
+              (setq compressed-iri (format "%s:%s" prefix (substring iri (length namespace-uri)))))))
+        (intern (or compressed-iri iri)))))
    ;; Handle quoted strings with proper unescaping
    ((string-prefix-p "\"" value-string)
     ;; Check if this is a triple-quoted string
@@ -1370,14 +1382,14 @@ If NAMESPACE is provided, prefix resources with it."
               (setq pos (1+ pos)))
             (push (substring content start pos) tokens)))
          ;; Handle special punctuation
-         ((memq char '(?\; ?\. ?\, ?\[ ?\]))
+         ((memq char '(?\; ?\. ?\, ?\[ ?\] ?\( ?\)))
           (push (char-to-string char) tokens)
           (setq pos (1+ pos)))
          ;; Handle regular tokens
          (t
           (let ((start pos))
             (while (and (< pos len)
-                        (not (memq (aref content pos) '(?\s ?\t ?\n ?\r ?\; ?\, ?< ?\" ?\[ ?\])))
+                        (not (memq (aref content pos) '(?\s ?\t ?\n ?\r ?\; ?\, ?< ?\" ?\[ ?\] ?\( ?\))))
                         ;; Don't stop at '.' if we're inside a prefixed resource name
                         (not (and (eq (aref content pos) ?\.)
                                   (not (string-match-p ":" (substring content start pos))))))
