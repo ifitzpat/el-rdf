@@ -1219,5 +1219,80 @@ frame:Killing a owl:Class , frame:Frame ;
     ;; Clean up
     (delete-file "/tmp/test-blank-brackets.ttl")))
 
+(ert-deftest test-ttl-language-tag-parsing ()
+  "Test TTL parsing properly handles language tags by stripping them"
+  (let ((test-graph (make-graph))
+        (ttl-content "@prefix wn30schema: <http://example.org/wn30schema/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+wn30schema:inSynset  a  owl:ObjectProperty ;
+        rdfs:comment   \"****A relation added here to link word senses and synsets explicitly (in the WordNet db, it is implicit in the sense tag record)****\"@en-US ;
+        rdfs:domain    wn30schema:WordSense ;
+        rdfs:label     \"is in synset\"@en ;
+        rdfs:range     wn30schema:Synset ;
+        owl:inverseOf  wn30schema:containsWordSense ."))
+    
+    ;; Create temporary TTL file
+    (with-temp-file "/tmp/test-language-tags.ttl"
+      (insert ttl-content))
+    
+    ;; Import the TTL file
+    (import-ttl "/tmp/test-language-tags.ttl" test-graph)
+    
+    ;; Get all triples
+    (let ((all-triples (triples '(t t t) test-graph)))
+      ;; Should parse all 6 triples
+      (should (= 6 (length all-triples)))
+      
+      ;; Check for malformed triples with language tags as symbols
+      (let ((lang-tag-issues (cl-remove-if-not
+                              (lambda (triple)
+                                (or (and (symbolp (nth 0 triple))
+                                         (string-match "@" (symbol-name (nth 0 triple))))
+                                    (and (symbolp (nth 1 triple))
+                                         (string-match "@" (symbol-name (nth 1 triple))))
+                                    (and (symbolp (nth 2 triple))
+                                         (string-match "@" (symbol-name (nth 2 triple))))))
+                              all-triples)))
+        ;; Should be no malformed language tag symbols
+        (should (= 0 (length lang-tag-issues))))
+      
+      ;; Check that we have the expected string values without language tags
+      (let ((comment-triples (cl-remove-if-not
+                              (lambda (triple)
+                                (and (symbolp (nth 1 triple))
+                                     (string= (symbol-name (nth 1 triple)) "rdfs:comment")))
+                              all-triples))
+            (label-triples (cl-remove-if-not
+                            (lambda (triple)
+                              (and (symbolp (nth 1 triple))
+                                   (string= (symbol-name (nth 1 triple)) "rdfs:label")))
+                            all-triples)))
+        ;; Should find exactly one of each
+        (should (= 1 (length comment-triples)))
+        (should (= 1 (length label-triples)))
+        
+        ;; Verify the objects are plain strings without language tags
+        (let ((comment-obj (nth 2 (car comment-triples)))
+              (label-obj (nth 2 (car label-triples))))
+          (should (stringp comment-obj))
+          (should (stringp label-obj))
+          (should (not (string-match "@" comment-obj)))
+          (should (not (string-match "@" label-obj)))
+          
+          ;; Verify the actual content was preserved
+          (should (string= comment-obj "****A relation added here to link word senses and synsets explicitly (in the WordNet db, it is implicit in the sense tag record)****"))
+          (should (string= label-obj "is in synset")))))
+    
+    ;; Verify main triples exist with proper queries
+    (should (ask '((wn30schema:inSynset a owl:ObjectProperty)) test-graph))
+    (should (ask '((wn30schema:inSynset rdfs:domain wn30schema:WordSense)) test-graph))
+    (should (ask '((wn30schema:inSynset rdfs:range wn30schema:Synset)) test-graph))
+    (should (ask '((wn30schema:inSynset owl:inverseOf wn30schema:containsWordSense)) test-graph))
+    
+    ;; Clean up
+    (delete-file "/tmp/test-language-tags.ttl")))
+
 (provide 'test-el-rdf)
 ;;; test-el-rdf.el ends here

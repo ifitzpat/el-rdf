@@ -1264,7 +1264,7 @@ If NAMESPACE is provided, prefix resources with it."
           ;; Don't unescape triple-quoted strings - they preserve literal content including newlines
           literal-value)
       ;; Handle regular quoted string
-      (if (string-match "\"\\(\\(?:[^\"\\\\]\\|\\\\.\\)*\\)\"\\(@\\([a-zA-Z-]+\\)\\|\\^\\^<\\(.+\\)>\\)?" value-string)
+      (if (string-match "\"\\(\\(?:[^\"\\\\]\\|\\\\.\\)*\\)\"\\(@\\([a-zA-Z][a-zA-Z0-9-]*\\)\\|\\^\\^<\\(.+\\)>\\)?" value-string)
           (let ((literal-value (match-string 1 value-string))
                 (lang (match-string 3 value-string))
                 (datatype (match-string 4 value-string)))
@@ -1307,6 +1307,10 @@ If NAMESPACE is provided, prefix resources with it."
          ;; Skip whitespace and newlines
          ((memq char '(?\s ?\t ?\n ?\r))
           (setq pos (1+ pos)))
+         ;; Handle comments - skip to end of line
+         ((eq char ?#)
+          (while (and (< pos len) (not (memq (aref content pos) '(?\n ?\r))))
+            (setq pos (1+ pos))))
          ;; Handle quoted strings - both single and triple quotes
          ((eq char ?\")
           (let ((start pos))
@@ -1335,6 +1339,27 @@ If NAMESPACE is provided, prefix resources with it."
                   (setq pos (1+ pos)))
                 (when (< pos len) ; Include closing quote
                   (setq pos (1+ pos)))
+                ;; Check for language tag @lang or datatype ^^<type>
+                (when (< pos len)
+                  (cond
+                   ;; Language tag @lang-code
+                   ((eq (aref content pos) ?@)
+                    (while (and (< pos len)
+                                (or (and (>= (aref content pos) ?a) (<= (aref content pos) ?z))
+                                    (and (>= (aref content pos) ?A) (<= (aref content pos) ?Z))
+                                    (eq (aref content pos) ?-)
+                                    (eq (aref content pos) ?@)))
+                      (setq pos (1+ pos))))
+                   ;; Datatype ^^<uri>
+                   ((and (< (1+ pos) len)
+                         (eq (aref content pos) ?^)
+                         (eq (aref content (1+ pos)) ?^))
+                    (setq pos (+ pos 2)) ; Skip ^^
+                    (when (and (< pos len) (eq (aref content pos) ?<))
+                      (while (and (< pos len) (not (eq (aref content pos) ?>)))
+                        (setq pos (1+ pos)))
+                      (when (< pos len) ; Include closing >
+                        (setq pos (1+ pos)))))))
                 (push (substring content start pos) tokens)))))
          ;; Handle angle bracket IRIs
          ((eq char ?<)
