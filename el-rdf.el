@@ -1261,7 +1261,7 @@ If NAMESPACE is provided, prefix resources with it."
             (when (and (string-prefix-p namespace-uri iri)
                        (or (null compressed-iri)
                            ;; Prefer longer namespace matches
-                           (> (length namespace-uri) 
+                           (> (length namespace-uri)
                               (length (cdr (assoc (substring compressed-iri 0 (string-match ":" compressed-iri)) prefixes))))))
               (setq compressed-iri (format "%s:%s" prefix (substring iri (length namespace-uri)))))))
         (intern (or compressed-iri iri)))))
@@ -1398,6 +1398,76 @@ If NAMESPACE is provided, prefix resources with it."
               (push (substring content start pos) tokens)))))))
     (nreverse tokens)))
 
+(defun el-rdf--parse-rdf-collection (tokens pos graph namespace)
+  "Parse an RDF collection ( item1 item2 ... ) and return (list-head . (triples . next-pos)).
+TOKENS should be a vector for O(1) access.
+Returns the head of the created RDF list structure."
+  (let ((current-node nil)
+        (list-head nil)
+        (triples '()))
+
+    ;; Skip opening parenthesis
+    (when (and (< pos (length tokens)) (equal (aref tokens pos) "("))
+      (setq pos (1+ pos))
+
+      ;; Handle empty list
+      (if (and (< pos (length tokens)) (equal (aref tokens pos) ")"))
+          (progn
+            (setq pos (1+ pos))
+            (setq list-head 'rdf:nil))
+
+        ;; Parse list items
+        (let ((previous-node nil)
+              (all-nodes '()))
+          (while (and (< pos (length tokens))
+                      (not (equal (aref tokens pos) ")"))
+                      (not (equal (aref tokens pos) "."))
+                      (not (equal (aref tokens pos) ";")))
+            (let ((item (aref tokens pos)))
+              (unless (or (equal item ",") (equal item ".") (equal item ";")) ; Skip commas and terminators
+                ;; Create new list node
+                (setq current-node (bnode))
+                (push current-node all-nodes)
+
+                ;; If this is the first item, set it as list head
+                (unless list-head
+                  (setq list-head current-node))
+
+                ;; Connect previous node to current node
+                (when previous-node
+                  (push (list previous-node 'rdf:rest current-node) triples))
+
+                ;; Handle the item (could be blank node, regular token, etc.)
+                (cond
+                 ;; Handle nested blank node
+                 ((equal item "[")
+                  (let* ((nested-result (el-rdf--parse-blank-node-bracket tokens pos graph namespace))
+                         (nested-blank-node (car nested-result))
+                         (nested-data (cdr nested-result))
+                         (nested-triples (car nested-data))
+                         (next-pos (cdr nested-data)))
+                    (push (list current-node 'rdf:first nested-blank-node) triples)
+                    (setq triples (nconc nested-triples triples))
+                    (setq pos (1- next-pos)))) ; Will be incremented below
+                 ;; Handle regular item - need to parse it as TTL value
+                 (t
+                  (let ((parsed-item (if (symbolp item) item
+                                       (el-rdf--parse-ttl-value graph item namespace))))
+                    (push (list current-node 'rdf:first parsed-item) triples))))
+
+                (setq previous-node current-node))
+              (setq pos (1+ pos)))
+
+          ;; Terminate the list with rdf:nil (only for the last node)
+          (when current-node
+            (push (list current-node 'rdf:rest 'rdf:nil) triples))
+
+          ;; Skip closing parenthesis
+          (when (and (< pos (length tokens)) (equal (aref tokens pos) ")"))
+            (setq pos (1+ pos))))))
+
+    (cons (or list-head 'rdf:nil) (cons (nreverse triples) pos)))))
+
 (defun el-rdf--parse-blank-node-bracket (tokens pos graph namespace)
   "Parse a blank node in bracket notation [ ... ] and return (blank-node . (triples . next-pos)).
 TOKENS should be a vector for O(1) access.
@@ -1407,7 +1477,7 @@ Returns (blank-node . (triples . next-pos)) for efficient processing."
     ;; Skip opening bracket
     (when (and (< pos (length tokens)) (equal (aref tokens pos) "["))
       (setq pos (1+ pos))
-      
+
       ;; Parse predicate-object pairs inside brackets
       (while (and (< pos (length tokens))
                   (not (equal (aref tokens pos) "]")))
@@ -1419,8 +1489,8 @@ Returns (blank-node . (triples . next-pos)) for efficient processing."
                         (not (member (aref tokens pos) '(";" "]"))))
               (let ((object (aref tokens pos)))
                 (unless (equal object ",")
-                  (let ((processed-object 
-                         (cond 
+                  (let ((processed-object
+                         (cond
                           ;; Handle nested blank nodes
                           ((equal object "[")
                            (let* ((nested-result (el-rdf--parse-blank-node-bracket tokens pos graph namespace))
@@ -1432,6 +1502,16 @@ Returns (blank-node . (triples . next-pos)) for efficient processing."
                              (setq triples (nconc nested-triples triples))
                              (setq pos (1- next-pos)) ; Will be incremented below
                              nested-blank-node))
+                          ;; Handle RDF collections
+                          ((equal object "(")
+                           (let* ((collection-result (el-rdf--parse-rdf-collection tokens pos graph namespace))
+                                  (list-head (car collection-result))
+                                  (collection-data (cdr collection-result))
+                                  (collection-triples (car collection-data))
+                                  (next-pos (cdr collection-data)))
+                             (setq triples (nconc collection-triples triples))
+                             (setq pos (1- next-pos)) ; Will be incremented below
+                             list-head))
                           ;; Handle regular objects
                           (t object))))
                     (push (list blank-node predicate processed-object) triples)))
@@ -1442,11 +1522,11 @@ Returns (blank-node . (triples . next-pos)) for efficient processing."
             ;; Skip semicolon if present
             (when (and (< pos (length tokens)) (equal (aref tokens pos) ";"))
               (setq pos (1+ pos))))))
-      
+
       ;; Skip closing bracket
       (when (and (< pos (length tokens)) (equal (aref tokens pos) "]"))
         (setq pos (1+ pos))))
-    
+
     (cons blank-node (cons (nreverse triples) pos))))
 
 (defun el-rdf--parse-simple-ttl-statement (tokens start-pos)
@@ -1495,6 +1575,16 @@ Returns (triples . next-pos)."
                            (next-pos (cdr blank-data)))
                       (push (list subject predicate blank-node) triples)
                       (setq triples (nconc blank-triples triples))
+                      (setq pos (1- next-pos)))) ; Will be incremented below
+                   ;; Handle RDF collection object in parentheses
+                   ((equal object "(")
+                    (let* ((collection-result (el-rdf--parse-rdf-collection tokens pos nil nil))
+                           (list-head (car collection-result))
+                           (collection-data (cdr collection-result))
+                           (collection-triples (car collection-data))
+                           (next-pos (cdr collection-data)))
+                      (push (list subject predicate list-head) triples)
+                      (setq triples (nconc collection-triples triples))
                       (setq pos (1- next-pos)))) ; Will be incremented below
                    ;; Handle regular object
                    (t
