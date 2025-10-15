@@ -1345,14 +1345,14 @@ If NAMESPACE is provided, prefix resources with it."
               (setq pos (1+ pos)))
             (push (substring content start pos) tokens)))
          ;; Handle special punctuation
-         ((memq char '(?\; ?\. ?\,))
+         ((memq char '(?\; ?\. ?\, ?\[ ?\]))
           (push (char-to-string char) tokens)
           (setq pos (1+ pos)))
          ;; Handle regular tokens
          (t
           (let ((start pos))
             (while (and (< pos len)
-                        (not (memq (aref content pos) '(?\s ?\t ?\n ?\r ?\; ?\, ?< ?\")))
+                        (not (memq (aref content pos) '(?\s ?\t ?\n ?\r ?\; ?\, ?< ?\" ?\[ ?\])))
                         ;; Don't stop at '.' if we're inside a prefixed resource name
                         (not (and (eq (aref content pos) ?\.)
                                   (not (string-match-p ":" (substring content start pos))))))
@@ -1360,6 +1360,57 @@ If NAMESPACE is provided, prefix resources with it."
             (when (> pos start)
               (push (substring content start pos) tokens)))))))
     (nreverse tokens)))
+
+(defun el-rdf--parse-blank-node-bracket (tokens pos graph namespace)
+  "Parse a blank node in bracket notation [ ... ] and return (blank-node . (triples . next-pos)).
+TOKENS should be a vector for O(1) access.
+Returns (blank-node . (triples . next-pos)) for efficient processing."
+  (let ((blank-node (bnode))
+        (triples '()))
+    ;; Skip opening bracket
+    (when (and (< pos (length tokens)) (equal (aref tokens pos) "["))
+      (setq pos (1+ pos))
+      
+      ;; Parse predicate-object pairs inside brackets
+      (while (and (< pos (length tokens))
+                  (not (equal (aref tokens pos) "]")))
+        (when (< (1+ pos) (length tokens)) ; Need at least predicate and object
+          (let ((predicate (aref tokens pos)))
+            (setq pos (1+ pos))
+            ;; Parse comma-separated objects for this predicate
+            (while (and (< pos (length tokens))
+                        (not (member (aref tokens pos) '(";" "]"))))
+              (let ((object (aref tokens pos)))
+                (unless (equal object ",")
+                  (let ((processed-object 
+                         (cond 
+                          ;; Handle nested blank nodes
+                          ((equal object "[")
+                           (let* ((nested-result (el-rdf--parse-blank-node-bracket tokens pos graph namespace))
+                                  (nested-blank-node (car nested-result))
+                                  (nested-data (cdr nested-result))
+                                  (nested-triples (car nested-data))
+                                  (next-pos (cdr nested-data)))
+                             ;; Use nconc for efficient list concatenation (destructive but safe here)
+                             (setq triples (nconc nested-triples triples))
+                             (setq pos (1- next-pos)) ; Will be incremented below
+                             nested-blank-node))
+                          ;; Handle regular objects
+                          (t object))))
+                    (push (list blank-node predicate processed-object) triples)))
+                (setq pos (1+ pos))
+                ;; Skip comma if present
+                (when (and (< pos (length tokens)) (equal (aref tokens pos) ","))
+                  (setq pos (1+ pos)))))
+            ;; Skip semicolon if present
+            (when (and (< pos (length tokens)) (equal (aref tokens pos) ";"))
+              (setq pos (1+ pos))))))
+      
+      ;; Skip closing bracket
+      (when (and (< pos (length tokens)) (equal (aref tokens pos) "]"))
+        (setq pos (1+ pos))))
+    
+    (cons blank-node (cons (nreverse triples) pos))))
 
 (defun el-rdf--parse-simple-ttl-statement (tokens start-pos)
   "Parse a single TTL statement from TOKENS starting at START-POS.
@@ -1370,9 +1421,21 @@ Returns (triples . next-pos)."
         (triples '())
         subject)
     (when (< pos len)
-      ;; Get subject
-      (setq subject (aref tokens pos))
-      (setq pos (1+ pos))
+      ;; Get subject (could be a blank node in brackets)
+      (if (equal (aref tokens pos) "[")
+          ;; Handle blank node subject
+          (let* ((blank-result (el-rdf--parse-blank-node-bracket tokens pos nil nil))
+                 (blank-node (car blank-result))
+                 (blank-data (cdr blank-result))
+                 (blank-triples (car blank-data))
+                 (next-pos (cdr blank-data)))
+            (setq subject blank-node)
+            (setq triples (nconc blank-triples triples))
+            (setq pos next-pos))
+        ;; Handle regular subject
+        (progn
+          (setq subject (aref tokens pos))
+          (setq pos (1+ pos))))
 
       ;; Parse predicate-object pairs
       (while (and (< pos len)
@@ -1385,7 +1448,20 @@ Returns (triples . next-pos)."
                         (not (member (aref tokens pos) '(";" "."))))
               (let ((object (aref tokens pos)))
                 (unless (equal object ",")
-                  (push (list subject predicate object) triples))
+                  (cond
+                   ;; Handle blank node object in brackets
+                   ((equal object "[")
+                    (let* ((blank-result (el-rdf--parse-blank-node-bracket tokens pos nil nil))
+                           (blank-node (car blank-result))
+                           (blank-data (cdr blank-result))
+                           (blank-triples (car blank-data))
+                           (next-pos (cdr blank-data)))
+                      (push (list subject predicate blank-node) triples)
+                      (setq triples (nconc blank-triples triples))
+                      (setq pos (1- next-pos)))) ; Will be incremented below
+                   ;; Handle regular object
+                   (t
+                    (push (list subject predicate object) triples))))
                 (setq pos (1+ pos))
                 ;; Skip comma if present
                 (when (and (< pos len) (equal (aref tokens pos) ","))
@@ -1442,10 +1518,13 @@ can share the same subject, and periods terminate statements."
                          (predicate-str (nth 1 triple-tokens))
                          (object-str (nth 2 triple-tokens)))
                     ;; Only process if this isn't a directive
-                    (unless (string-prefix-p "@" subject-str)
-                      (let* ((subject (el-rdf--parse-ttl-value graph subject-str namespace))
-                             (predicate (el-rdf--parse-ttl-value graph predicate-str namespace))
-                             (object (el-rdf--parse-ttl-value graph object-str namespace))
+                    (unless (and (stringp subject-str) (string-prefix-p "@" subject-str))
+                      (let* ((subject (if (symbolp subject-str) subject-str
+                                        (el-rdf--parse-ttl-value graph subject-str namespace)))
+                             (predicate (if (symbolp predicate-str) predicate-str
+                                          (el-rdf--parse-ttl-value graph predicate-str namespace)))
+                             (object (if (symbolp object-str) object-str
+                                       (el-rdf--parse-ttl-value graph object-str namespace)))
                              ;; Normalize rdf:type predicate
                              (predicate (if (and (symbolp predicate)
                                                  (string= (symbol-name predicate)

@@ -1131,5 +1131,93 @@ someProperty rdfs:label \"some property\" ."))
     (let ((all-triples (triples '(t t t) test-graph)))
       (should (= 0 (length all-triples))))))
 
+(ert-deftest test-ttl-blank-node-bracket-notation ()
+  "Test TTL parsing of blank nodes in bracket notation [ ... ]"
+  (let ((test-graph (make-graph))
+        (ttl-content "@prefix frame: <http://example.org/frame/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix componency: <http://example.org/componency/> .
+
+frame:Killing a owl:Class , frame:Frame ;
+    rdfs:subClassOf frame:Transitive_action ;
+    rdfs:subClassOf [ a owl:Restriction ;
+                      owl:onProperty componency:hasComponent ;
+                      owl:someValuesFrom frame:Execution ] ;
+    rdfs:subClassOf [ a owl:Restriction ;
+                      owl:onProperty componency:hasComponent ;
+                      owl:someValuesFrom frame:Death ] ."))
+    
+    ;; Create temporary TTL file
+    (with-temp-file "/tmp/test-blank-brackets.ttl"
+      (insert ttl-content))
+    
+    ;; Import the TTL file
+    (import-ttl "/tmp/test-blank-brackets.ttl" test-graph)
+    
+    ;; Get all triples
+    (let ((all-triples (triples '(t t t) test-graph)))
+      ;; Should parse all triples including blank node contents
+      (should (= 11 (length all-triples)))
+      
+      ;; Check that we have proper blank nodes (symbols starting with _:)
+      (let ((blank-node-triples (cl-remove-if-not 
+                                 (lambda (triple)
+                                   (or (and (symbolp (nth 0 triple))
+                                            (string-prefix-p "_:" (symbol-name (nth 0 triple))))
+                                       (and (symbolp (nth 2 triple))
+                                            (string-prefix-p "_:" (symbol-name (nth 2 triple))))))
+                                 all-triples)))
+        (should (= 8 (length blank-node-triples))))
+      
+      ;; Check for malformed triples (should not contain "[" or "]")
+      (let ((malformed-triples (cl-remove-if-not
+                                (lambda (triple)
+                                  (or (and (symbolp (nth 2 triple))
+                                           (or (string-match "\\[" (symbol-name (nth 2 triple)))
+                                               (string-match "\\]" (symbol-name (nth 2 triple)))))
+                                      (and (symbolp (nth 0 triple))
+                                           (or (string-match "\\[" (symbol-name (nth 0 triple)))
+                                               (string-match "\\]" (symbol-name (nth 0 triple)))))))
+                                all-triples)))
+        ;; Should be no malformed triples with brackets
+        (should (= 0 (length malformed-triples))))
+      
+      ;; Verify we have the expected structure - frame:Killing should have triples
+      (let ((killing-triples (cl-remove-if-not
+                              (lambda (triple)
+                                (and (symbolp (nth 0 triple))
+                                     (string= (symbol-name (nth 0 triple)) "frame:Killing")))
+                              all-triples)))
+        (should (= 5 (length killing-triples)))
+        
+        ;; Check for rdfs:subClassOf relationships with blank nodes
+        (let ((subclass-blank-triples (cl-remove-if-not
+                                       (lambda (triple)
+                                         (and (symbolp (nth 0 triple))
+                                              (string= (symbol-name (nth 0 triple)) "frame:Killing")
+                                              (symbolp (nth 1 triple))
+                                              (string= (symbol-name (nth 1 triple)) "rdfs:subClassOf")
+                                              (symbolp (nth 2 triple))
+                                              (string-prefix-p "_:" (symbol-name (nth 2 triple)))))
+                                       all-triples)))
+          ;; Should have 2 rdfs:subClassOf relationships with blank nodes
+          (should (= 2 (length subclass-blank-triples))))))
+    
+    ;; Verify specific blank node triples exist
+    ;; Each blank node should have the proper internal structure
+    (should (ask '(($blank a owl:Restriction)) test-graph))
+    (should (ask '(($blank owl:onProperty componency:hasComponent)) test-graph))
+    (should (ask '(($blank owl:someValuesFrom frame:Execution)) test-graph))
+    (should (ask '(($blank owl:someValuesFrom frame:Death)) test-graph))
+    
+    ;; Verify main triples exist
+    (should (ask '((frame:Killing a owl:Class)) test-graph))
+    (should (ask '((frame:Killing a frame:Frame)) test-graph))
+    (should (ask '((frame:Killing rdfs:subClassOf frame:Transitive_action)) test-graph))
+    
+    ;; Clean up
+    (delete-file "/tmp/test-blank-brackets.ttl")))
+
 (provide 'test-el-rdf)
 ;;; test-el-rdf.el ends here
