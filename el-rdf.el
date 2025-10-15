@@ -269,6 +269,24 @@ Returns nil if metadata file doesn't exist."
     (when (file-exists-p checkpoint-dir)
       (directory-files checkpoint-dir nil "\\.checkpoint$"))))
 
+(defun el-rdf-delete-checkpoint (graph-name)
+  "Delete checkpoint files for GRAPH-NAME.
+Removes both the main checkpoint file and any associated metadata file."
+  (let* ((checkpoint-dir (el-rdf--get-checkpoint-dir))
+         (checkpoint-file (el-rdf-checkpoint-file-path graph-name))
+         (metadata-file (expand-file-name (format "%s.metadata" graph-name) checkpoint-dir)))
+    (when (file-exists-p checkpoint-file)
+      (delete-file checkpoint-file)
+      (message "Deleted checkpoint file: %s" checkpoint-file))
+    (when (file-exists-p metadata-file)
+      (delete-file metadata-file)
+      (message "Deleted metadata file: %s" metadata-file))
+    ;; Remove from registered checkpoints if present
+    (maphash (lambda (graph info)
+               (when (string= (car info) graph-name)
+                 (remhash graph el-rdf-graph-checkpoints)))
+             el-rdf-graph-checkpoints)))
+
   (defun update-dual (key val orig)
     ;; orig is ((a (foo:bar baz:guuq))(frob:nix ("1")))
     (let* ((oldval (cdr (assoc key orig)))) ; '(val1 val2 val3)
