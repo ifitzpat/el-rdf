@@ -1337,5 +1337,414 @@ framenet:Resource2 framenet:related <https://w3id.org/framester/framenet/abox/lu
                                   all-triples)))
         (should (= (length symbols-with-parens) 2))))))
 
+;; TTL Parsing Fix Tests
+;; Tests for critical TTL parsing issues that break checkpoint saving/loading
+
+;;; Tests for Issue 1: # character handling in symbols/URIs
+
+(ert-deftest test-hash-character-serialization ()
+  "Test that symbols with # characters can be saved and loaded correctly."
+  (let ((graph (make-graph))
+        (temp-file "/tmp/test-hash-serialization.el")
+        (symbol-with-hash (intern "http://example.org#fragment")))
+    ;; Add a triple with a symbol containing #
+    (add-triple (list 'test:subject 'test:predicate symbol-with-hash) graph)
+    
+    ;; Save the graph
+    (save-graph graph temp-file)
+    
+    ;; Create a new graph and load from file
+    (let ((loaded-graph (make-graph)))
+      (load-graph loaded-graph temp-file)
+      
+      ;; Check that the triple was loaded correctly
+      (let ((loaded-triples (triples '(t t t) loaded-graph)))
+        (should (= 1 (length loaded-triples)))
+        (should (equal (car loaded-triples) 
+                       (list 'test:subject 'test:predicate symbol-with-hash)))))
+    
+    ;; Clean up
+    (when (file-exists-p temp-file)
+      (delete-file temp-file))))
+
+(ert-deftest test-uri-with-hash-normalization ()
+  "Test that URIs with # are properly normalized to namespace:resource format."
+  (let ((graph (make-graph))
+        (test-ttl "@prefix ex: <http://example.org#> .
+ex:subject ex:predicate ex:fragment .
+"))
+    ;; Register prefix and parse TTL
+    (el-rdf--parse-ttl-content graph test-ttl)
+    
+    ;; Get the parsed triples
+    (let ((triples (triples '(t t t) graph)))
+      (should (= 1 (length triples)))
+      (let ((triple (car triples)))
+        ;; All should be properly prefixed symbols, not URIs with #
+        (should (symbolp (nth 0 triple)))
+        (should (symbolp (nth 1 triple)))
+        (should (symbolp (nth 2 triple)))
+        ;; Should not contain literal # characters in symbol names
+        (should (string-match-p "ex:" (symbol-name (nth 0 triple))))
+        (should (string-match-p "ex:" (symbol-name (nth 1 triple))))
+        (should (string-match-p "ex:" (symbol-name (nth 2 triple))))))))
+
+;;; Tests for Issue 2: Duplicate rdf:rest triples in RDF collections
+
+(ert-deftest test-no-duplicate-rdf-rest-triples ()
+  "Test that RDF collections don't generate duplicate rdf:rest triples."
+  (let ((graph (make-graph))
+        (test-ttl "@prefix wn30: <http://example.org/wn30/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+
+_:test owl:unionOf ( wn30:Item1 wn30:Item2 ) .
+"))
+    ;; Parse the TTL content
+    (el-rdf--parse-ttl-content graph test-ttl)
+    
+    ;; Get all rdf:rest triples
+    (let ((rdf-rest-triples (cl-remove-if-not
+                             (lambda (triple)
+                               (and (symbolp (nth 1 triple))
+                                    (string= (symbol-name (nth 1 triple)) "rdf:rest")))
+                             (triples '(t t t) graph))))
+      
+      ;; Should have exactly 2 rdf:rest triples (one pointing to next node, one to rdf:nil)
+      (should (= 2 (length rdf-rest-triples)))
+      
+      ;; Check that each blank node appears as subject only once in rdf:rest triples
+      (let ((subjects (mapcar (lambda (triple) (nth 0 triple)) rdf-rest-triples)))
+        (should (= 2 (length (-uniq subjects))))  ; All subjects should be unique
+        
+        ;; One should point to rdf:nil, one should point to another blank node
+        (let ((objects (mapcar (lambda (triple) (nth 2 triple)) rdf-rest-triples)))
+          (should (member 'rdf:nil objects))
+          (should (= 1 (length (cl-remove-if (lambda (obj) (eq obj 'rdf:nil)) objects)))))))))
+
+(ert-deftest test-rdf-collection-proper-structure ()
+  "Test that RDF collections create proper list structure without duplicates."
+  (let ((graph (make-graph))
+        (test-ttl "@prefix wn30: <http://example.org/wn30/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+
+_:test owl:unionOf ( wn30:Item1 wn30:Item2 wn30:Item3 ) .
+"))
+    ;; Parse the TTL content
+    (el-rdf--parse-ttl-content graph test-ttl)
+    
+    (let ((all-triples (triples '(t t t) graph))
+          (rdf-first-count 0)
+          (rdf-rest-count 0))
+      
+      ;; Count rdf:first and rdf:rest triples
+      (dolist (triple all-triples)
+        (when (and (symbolp (nth 1 triple))
+                   (string= (symbol-name (nth 1 triple)) "rdf:first"))
+          (setq rdf-first-count (1+ rdf-first-count)))
+        (when (and (symbolp (nth 1 triple))
+                   (string= (symbol-name (nth 1 triple)) "rdf:rest"))
+          (setq rdf-rest-count (1+ rdf-rest-count))))
+      
+      ;; For a 3-item list: should have exactly 3 rdf:first and 3 rdf:rest triples
+      (should (= 3 rdf-first-count))
+      (should (= 3 rdf-rest-count))
+      
+      ;; Verify no duplicate rdf:rest triples for same subject
+      (let ((rdf-rest-triples (cl-remove-if-not
+                               (lambda (triple)
+                                 (and (symbolp (nth 1 triple))
+                                      (string= (symbol-name (nth 1 triple)) "rdf:rest")))
+                               all-triples)))
+        (let ((subjects (mapcar (lambda (triple) (nth 0 triple)) rdf-rest-triples)))
+          (should (= (length subjects) (length (-uniq subjects)))))))))
+
+;;; Tests for Issue 3: Punctuation characters (], .) parsed as collection items
+
+(ert-deftest test-no-punctuation-in-collections ()
+  "Test that punctuation characters like ] and . don't become RDF collection items."
+  (let ((graph (make-graph))
+        (test-ttl "@prefix wn30schema: <http://example.org/wn30schema/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+wn30schema:seeAlso rdfs:range [ a owl:Class ;
+                                owl:unionOf ( wn30schema:VerbWordSense wn30schema:AdjectiveWordSense )
+                              ] .
+"))
+    ;; Parse the TTL content
+    (el-rdf--parse-ttl-content graph test-ttl)
+    
+    ;; Get all triples
+    (let ((all-triples (triples '(t t t) graph)))
+      
+      ;; Check that no triple has ] or . as rdf:first object
+      (let ((malformed-triples (cl-remove-if-not
+                                (lambda (triple)
+                                  (and (symbolp (nth 1 triple))
+                                       (string= (symbol-name (nth 1 triple)) "rdf:first")
+                                       (or (and (symbolp (nth 2 triple))
+                                                (string= (symbol-name (nth 2 triple)) "]"))
+                                           (and (symbolp (nth 2 triple))
+                                                (string= (symbol-name (nth 2 triple)) ".")))))
+                                all-triples)))
+        (should (= 0 (length malformed-triples)))
+        (when (> (length malformed-triples) 0)
+          (message "Found malformed triples with punctuation: %s" malformed-triples)))
+      
+      ;; Check that no triple has . as an object (period should terminate statements, not be objects)
+      (let ((period-object-triples (cl-remove-if-not
+                                    (lambda (triple)
+                                      (and (symbolp (nth 2 triple))
+                                           (string= (symbol-name (nth 2 triple)) ".")))
+                                    all-triples)))
+        (should (= 0 (length period-object-triples)))
+        (when (> (length period-object-triples) 0)
+          (message "Found triples with period as object: %s" period-object-triples))))))
+
+(ert-deftest test-nested-structures-parsing ()
+  "Test that nested blank nodes and collections parse correctly without edge case issues."
+  (let ((graph (make-graph))
+        (test-ttl "@prefix wn30: <http://example.org/wn30/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+
+_:test owl:unionOf ( [ owl:hasValue wn30:Item1 ] wn30:Item2 ) .
+"))
+    ;; Parse the TTL content
+    (el-rdf--parse-ttl-content graph test-ttl)
+    
+    (let ((all-triples (triples '(t t t) graph)))
+      ;; Should have proper triples without malformed punctuation
+      (let ((has-malformed-punctuation
+             (cl-some (lambda (triple)
+                        (or (and (symbolp (nth 0 triple))
+                                 (string-match-p "[\\]\\.]" (symbol-name (nth 0 triple))))
+                            (and (symbolp (nth 1 triple))
+                                 (string-match-p "[\\]\\.]" (symbol-name (nth 1 triple))))
+                            (and (symbolp (nth 2 triple))
+                                 (member (symbol-name (nth 2 triple)) '("]" ".")))))
+                      all-triples)))
+        (should-not has-malformed-punctuation))
+      
+      ;; Should have at least rdf:first, rdf:rest, owl:unionOf, and owl:hasValue triples
+      (let ((predicates (mapcar (lambda (triple) (symbol-name (nth 1 triple))) all-triples)))
+        (should (member "rdf:first" predicates))
+        (should (member "rdf:rest" predicates))
+        (should (member "owl:unionOf" predicates))
+        (should (member "owl:hasValue" predicates))))))
+
+;;; Tests for Issue 4: End-to-end checkpoint saving/loading
+
+(ert-deftest test-hash-character-checkpoint-roundtrip ()
+  "Test that graphs with # characters in symbols survive checkpoint save/load cycles."
+  (let ((graph-name "test-hash-checkpoint")
+        (symbol-with-hash (intern "http://example.org#fragment"))
+        (temp-file "/tmp/test-hash-checkpoint.el"))
+    ;; Clean up any existing checkpoint
+    (when (file-exists-p temp-file) (delete-file temp-file))
+    
+    ;; Create graph and add triple with # character
+    (let ((graph (make-graph)))
+      (add-triple (list 'test:subject 'test:predicate symbol-with-hash) graph)
+      
+      ;; Save to checkpoint
+      (save-graph graph temp-file)
+      
+      ;; Load into new graph
+      (let ((loaded-graph (make-graph)))
+        (load-graph loaded-graph temp-file)
+        
+        ;; Verify the triple survived the roundtrip
+        (let ((loaded-triples (triples '(t t t) loaded-graph)))
+          (should (= 1 (length loaded-triples)))
+          (should (equal (car loaded-triples) 
+                         (list 'test:subject 'test:predicate symbol-with-hash))))))
+    
+    ;; Clean up
+    (when (file-exists-p temp-file) (delete-file temp-file))))
+
+(ert-deftest test-rdf-collection-checkpoint-roundtrip ()
+  "Test that RDF collections maintain proper structure through checkpoint save/load."
+  (let ((graph-name "test-collection-checkpoint")
+        (temp-file "/tmp/test-collection-checkpoint.el"))
+    ;; Clean up any existing checkpoint
+    (when (file-exists-p temp-file) (delete-file temp-file))
+    
+    ;; Create graph with RDF collection
+    (let ((graph (make-graph)))
+      (el-rdf--parse-ttl-content graph "@prefix wn30: <http://example.org/wn30/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+
+_:test owl:unionOf ( wn30:Item1 wn30:Item2 wn30:Item3 ) .
+")
+      
+      ;; Save to checkpoint
+      (save-graph graph temp-file)
+      
+      ;; Load into new graph
+      (let ((loaded-graph (make-graph)))
+        (load-graph loaded-graph temp-file)
+        
+        ;; Verify structure is correct
+        (let ((all-triples (triples '(t t t) loaded-graph))
+              (rdf-first-count 0)
+              (rdf-rest-count 0)
+              (rdf-rest-triples '()))
+          
+          ;; Count rdf:first and rdf:rest triples
+          (dolist (triple all-triples)
+            (when (and (symbolp (nth 1 triple))
+                       (string= (symbol-name (nth 1 triple)) "rdf:first"))
+              (setq rdf-first-count (1+ rdf-first-count)))
+            (when (and (symbolp (nth 1 triple))
+                       (string= (symbol-name (nth 1 triple)) "rdf:rest"))
+              (setq rdf-rest-count (1+ rdf-rest-count))
+              (push triple rdf-rest-triples)))
+          
+          ;; Should have exactly 3 rdf:first and 3 rdf:rest triples
+          (should (= 3 rdf-first-count))
+          (should (= 3 rdf-rest-count))
+          
+          ;; Verify no duplicate rdf:rest triples for same subject
+          (let ((subjects (mapcar (lambda (triple) (nth 0 triple)) rdf-rest-triples)))
+            (should (= (length subjects) (length (-uniq subjects))))
+            
+            ;; Verify exactly one points to rdf:nil
+            (let ((nil-objects (cl-count 'rdf:nil (mapcar (lambda (triple) (nth 2 triple)) rdf-rest-triples))))
+              (should (= 1 nil-objects)))))))
+    
+    ;; Clean up
+    (when (file-exists-p temp-file) (delete-file temp-file))))
+
+(ert-deftest test-complex-nested-checkpoint-roundtrip ()
+  "Test that complex nested structures (blank nodes + collections) survive checkpoint cycles."
+  (let ((graph-name "test-complex-checkpoint")
+        (temp-file "/tmp/test-complex-checkpoint.el"))
+    ;; Clean up any existing checkpoint
+    (when (file-exists-p temp-file) (delete-file temp-file))
+    
+    ;; Create graph with complex nested structure
+    (let ((graph (make-graph)))
+      (el-rdf--parse-ttl-content graph "@prefix wn30schema: <http://example.org/wn30schema/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+wn30schema:seeAlso rdfs:range [ a owl:Class ;
+                                owl:unionOf ( wn30schema:VerbWordSense wn30schema:AdjectiveWordSense )
+                              ] .
+")
+      
+      ;; Save to checkpoint
+      (save-graph graph temp-file)
+      
+      ;; Load into new graph
+      (let ((loaded-graph (make-graph)))
+        (load-graph loaded-graph temp-file)
+        
+        ;; Verify no malformed triples with punctuation
+        (let ((all-triples (triples '(t t t) loaded-graph)))
+          ;; Should have at least some triples
+          (should (> (length all-triples) 0))
+          
+          ;; Check that no triple has ] or . as object
+          (let ((malformed-triples (cl-remove-if-not
+                                    (lambda (triple)
+                                      (and (symbolp (nth 2 triple))
+                                           (member (symbol-name (nth 2 triple)) '("]" "."))))
+                                    all-triples)))
+            (should (= 0 (length malformed-triples))))
+          
+          ;; Check that no triple has ] or . as rdf:first object
+          (let ((malformed-collection-triples (cl-remove-if-not
+                                               (lambda (triple)
+                                                 (and (symbolp (nth 1 triple))
+                                                      (string= (symbol-name (nth 1 triple)) "rdf:first")
+                                                      (symbolp (nth 2 triple))
+                                                      (member (symbol-name (nth 2 triple)) '("]" "."))))
+                                               all-triples)))
+            (should (= 0 (length malformed-collection-triples))))
+          
+          ;; Should have proper predicates for the structure
+          (let ((predicates (mapcar (lambda (triple) (symbol-name (nth 1 triple))) all-triples)))
+            (should (member "rdfs:range" predicates))
+            (should (member "a" predicates))
+            (should (member "owl:unionOf" predicates))
+            (should (member "rdf:first" predicates))
+            (should (member "rdf:rest" predicates))))))
+    
+    ;; Clean up
+    (when (file-exists-p temp-file) (delete-file temp-file))))
+
+(ert-deftest test-named-graph-checkpoint-system ()
+  "Test the named graph checkpoint system with fixed parsing."
+  (let ((graph-name "test-named-checkpoint"))
+    ;; Clean up any existing checkpoint
+    (condition-case nil (el-rdf-delete-checkpoint graph-name) (error nil))
+    
+    ;; Create named graph with complex data including # characters and collections
+    (let ((graph (make-graph graph-name)))
+      ;; Add triple with # character
+      (add-triple (list 'test:subject 'test:predicate (intern "http://example.org#fragment")) graph)
+      
+      ;; Add RDF collection via TTL parsing
+      (el-rdf--parse-ttl-content graph "@prefix ex: <http://example.org/> .
+ex:list ex:contains ( ex:item1 ex:item2 ex:item3 ) .
+")
+      
+      ;; Save using named graph checkpoint system
+      (el-rdf-save-named-graph graph)
+      
+      ;; Verify checkpoint file exists
+      (should (file-exists-p (el-rdf-checkpoint-file-path graph-name)))
+      
+      ;; Restore the graph
+      (let ((restored-graph (el-rdf-restore-named-graph graph-name)))
+        ;; Verify all triples survived
+        (let ((original-triples (triples '(t t t) graph))
+              (restored-triples (triples '(t t t) restored-graph)))
+          (should (= (length original-triples) (length restored-triples)))
+          
+          ;; Verify specific triples exist
+          (should (member (list 'test:subject 'test:predicate (intern "http://example.org#fragment"))
+                          restored-triples))
+          
+          ;; Verify RDF collection structure
+          (let ((rdf-first-triples (cl-remove-if-not
+                                    (lambda (triple)
+                                      (and (symbolp (nth 1 triple))
+                                           (string= (symbol-name (nth 1 triple)) "rdf:first")))
+                                    restored-triples)))
+            (should (= 3 (length rdf-first-triples)))))))
+    
+    ;; Clean up
+    (el-rdf-delete-checkpoint graph-name)))
+
+(ert-deftest test-multiple-hash-symbols-checkpoint ()
+  "Test checkpointing with multiple different symbols containing # characters."
+  (let ((temp-file "/tmp/test-multiple-hash.el"))
+    ;; Clean up any existing file
+    (when (file-exists-p temp-file) (delete-file temp-file))
+    
+    (let ((graph (make-graph))
+          (symbols-with-hash (list (intern "http://example.org#frag1")
+                                   (intern "http://other.com#frag2") 
+                                   (intern "urn:uuid:12345#section"))))
+      ;; Add triples with various # symbols
+      (dolist (sym symbols-with-hash)
+        (add-triple (list 'test:subject 'test:predicate sym) graph))
+      
+      ;; Save and load
+      (save-graph graph temp-file)
+      (let ((loaded-graph (make-graph)))
+        (load-graph loaded-graph temp-file)
+        
+        ;; Verify all symbols survived the roundtrip
+        (let ((loaded-triples (triples '(t t t) loaded-graph)))
+          (should (= (length symbols-with-hash) (length loaded-triples)))
+          (dolist (sym symbols-with-hash)
+            (should (member (list 'test:subject 'test:predicate sym) loaded-triples))))))
+    
+    ;; Clean up
+    (when (file-exists-p temp-file) (delete-file temp-file))))
+
 (provide 'test-el-rdf)
 ;;; test-el-rdf.el ends here
