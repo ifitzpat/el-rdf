@@ -2711,13 +2711,14 @@ someProperty schema:label \"some property\" ." out))
                    (bob foaf@name "Bob")
                    (alice foaf@knows bob))))
     (let ((node-list (nodes triples)))
-      ;; Should include subjects and objects
+      ;; Should include subjects and objects, NOT predicates
       (is (member 'alice node-list))
       (is (member 'bob node-list))
       (is (member "Alice" node-list :test #'equal))
       (is (member "Bob" node-list :test #'equal))
-      (is (member 'foaf@name node-list))
-      (is (member 'foaf@knows node-list)))))
+      ;; Predicates should NOT be in nodes list
+      (is (not (member 'foaf@name node-list)))
+      (is (not (member 'foaf@knows node-list))))))
 
 (test literals-function
   "Test filtering literals from node list"

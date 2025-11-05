@@ -1600,19 +1600,18 @@ Examples:
           name))))
 
 (defun nodes (triples)
-  "Extract all unique nodes from TRIPLES (subjects, predicates, and objects).
+  "Extract all unique nodes from TRIPLES (subjects and objects only).
 
 Arguments:
   TRIPLES - List of triples
 
 Returns:
-  List of unique nodes
+  List of unique nodes (subjects and objects)
 
 Examples:
-  (nodes '((alice foaf@name \"Alice\"))) => (alice foaf@name \"Alice\")"
+  (nodes '((alice foaf@name \"Alice\"))) => (alice \"Alice\")"
   (remove-duplicates
    (append (mapcar #'first triples)
-           (mapcar #'second triples)
            (mapcar #'third triples))
    :test #'equal))
 
