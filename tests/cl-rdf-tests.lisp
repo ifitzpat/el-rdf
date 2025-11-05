@@ -2035,7 +2035,237 @@
       (is (equal large-desc (third (first resolved)))))))
 
 ;;; ============================================================================
-;;; Phase 9-12: Additional test suites
+;;; Phase 9: Serialization and Format Conversion Tests
+;;; ============================================================================
+
+(in-suite :persistence)
+
+;;; Serialization Tests
+
+(test triples-to-string-basic
+  "Test triples-to-string with simple triples"
+  (let* ((triples '((alice foaf@name "Alice")
+                    (bob foaf@name "Bob")))
+         (serialized (triples-to-string triples)))
+    (is (stringp serialized))
+    (is (search "alice" serialized))
+    (is (search "foaf@name" serialized))
+    (is (search "Alice" serialized))))
+
+(test triples-to-string-symbols-with-special-chars
+  "Test triples-to-string handles symbols with # correctly"
+  (let* ((triples '((|resource#1| foaf@name "Test")))
+         (serialized (triples-to-string triples)))
+    ;; Should be able to read it back
+    (let ((read-back (read-from-string serialized)))
+      (is (equal triples read-back)))))
+
+(test triples-to-string-empty
+  "Test triples-to-string with empty list"
+  (let ((serialized (triples-to-string nil)))
+    (is (stringp serialized))
+    (is (equal nil (read-from-string serialized)))))
+
+(test triples-to-string-preserves-types
+  "Test triples-to-string preserves different value types"
+  (let* ((triples '((alice foaf@age 30)
+                    (bob foaf@name "Bob")
+                    (charlie rdf@type foaf@Person)))
+         (serialized (triples-to-string triples))
+         (read-back (read-from-string serialized)))
+    (is (equal triples read-back))))
+
+;;; Format Conversion Tests
+
+(test el-rdf-symbol-p-detects-el-format
+  "Test el-rdf-symbol-p detects el-rdf format symbols"
+  (is (el-rdf-symbol-p 'foaf:name))
+  (is (el-rdf-symbol-p 'schema:Person))
+  (is (el-rdf-symbol-p 'rdf:type)))
+
+(test el-rdf-symbol-p-rejects-cl-format
+  "Test el-rdf-symbol-p rejects cl-rdf format"
+  (is (not (el-rdf-symbol-p 'foaf@name)))
+  (is (not (el-rdf-symbol-p 'schema@Person))))
+
+(test el-rdf-symbol-p-rejects-variables
+  "Test el-rdf-symbol-p doesn't convert variables"
+  (is (not (el-rdf-symbol-p '$name)))
+  (is (not (el-rdf-symbol-p '$subject))))
+
+(test el-rdf-symbol-p-rejects-keywords
+  "Test el-rdf-symbol-p doesn't convert keywords"
+  (is (not (el-rdf-symbol-p :keyword)))
+  (is (not (el-rdf-symbol-p :test))))
+
+(test el-rdf-symbol-p-rejects-non-symbols
+  "Test el-rdf-symbol-p rejects non-symbols"
+  (is (not (el-rdf-symbol-p "string")))
+  (is (not (el-rdf-symbol-p 42)))
+  (is (not (el-rdf-symbol-p nil))))
+
+(test convert-symbol-el-to-cl-basic
+  "Test convert-symbol-el-to-cl converts namespace:resource"
+  (is (eq 'foaf@name (convert-symbol-el-to-cl 'foaf:name)))
+  (is (eq 'schema@Person (convert-symbol-el-to-cl 'schema:Person)))
+  (is (eq 'rdf@type (convert-symbol-el-to-cl 'rdf:type))))
+
+(test convert-symbol-el-to-cl-preserves-cl-format
+  "Test convert-symbol-el-to-cl leaves cl-rdf symbols unchanged"
+  (is (eq 'foaf@name (convert-symbol-el-to-cl 'foaf@name)))
+  (is (eq 'schema@Person (convert-symbol-el-to-cl 'schema@Person))))
+
+(test convert-symbol-el-to-cl-preserves-variables
+  "Test convert-symbol-el-to-cl doesn't convert variables"
+  (is (eq '$name (convert-symbol-el-to-cl '$name)))
+  (is (eq '$subject (convert-symbol-el-to-cl '$subject))))
+
+(test convert-symbol-el-to-cl-preserves-keywords
+  "Test convert-symbol-el-to-cl doesn't convert keywords"
+  (is (eq :keyword (convert-symbol-el-to-cl :keyword))))
+
+(test convert-symbol-el-to-cl-preserves-non-symbols
+  "Test convert-symbol-el-to-cl preserves non-symbol values"
+  (is (equal "string" (convert-symbol-el-to-cl "string")))
+  (is (equal 42 (convert-symbol-el-to-cl 42)))
+  (is (equal nil (convert-symbol-el-to-cl nil))))
+
+(test convert-triple-el-to-cl-basic
+  "Test convert-triple-el-to-cl converts entire triple"
+  (let ((el-triple '(alice foaf:name "Alice"))
+        (cl-triple '(alice foaf@name "Alice")))
+    (is (equal cl-triple (convert-triple-el-to-cl el-triple)))))
+
+(test convert-triple-el-to-cl-mixed-format
+  "Test convert-triple-el-to-cl handles mixed el/cl format"
+  (let ((mixed '(alice foaf:name "Alice"))
+        (expected '(alice foaf@name "Alice")))
+    (is (equal expected (convert-triple-el-to-cl mixed)))))
+
+(test convert-triple-el-to-cl-preserves-strings
+  "Test convert-triple-el-to-cl preserves string objects"
+  (let ((triple '(bob foaf:bio "A long biography"))
+        (expected '(bob foaf@bio "A long biography")))
+    (is (equal expected (convert-triple-el-to-cl triple)))))
+
+(test convert-triple-el-to-cl-with-rdf-type
+  "Test convert-triple-el-to-cl handles rdf:type"
+  (let ((el-triple '(alice rdf:type foaf:Person))
+        (cl-triple '(alice rdf@type foaf@Person)))
+    (is (equal cl-triple (convert-triple-el-to-cl el-triple)))))
+
+;;; Save/Load Tests
+
+(test save-graph-basic
+  "Test save-graph creates file with triples"
+  (let* ((graph (make-graph))
+         (tmpfile (format nil "/tmp/cl-rdf-test-~A.rdf" (get-universal-time))))
+    (add-triples '((alice foaf@name "Alice")
+                   (bob foaf@name "Bob"))
+                 graph)
+    (save-graph graph tmpfile)
+    (is (probe-file tmpfile))
+    (delete-file tmpfile)))
+
+(test save-load-roundtrip-cl-format
+  "Test save-graph and load-graph preserve cl-rdf format triples"
+  (let* ((graph (make-graph))
+         (tmpfile (format nil "/tmp/cl-rdf-test-~A.rdf" (get-universal-time))))
+    (add-triples '((alice foaf@name "Alice")
+                   (bob foaf@age 30)
+                   (charlie rdf@type foaf@Person))
+                 graph)
+    (save-graph graph tmpfile)
+
+    (let ((loaded-graph (make-graph)))
+      (load-graph loaded-graph tmpfile)
+      (let ((loaded-triples (triples '(t t t) loaded-graph)))
+        (is (= 3 (length loaded-triples)))
+        (is (member '(alice foaf@name "Alice") loaded-triples :test #'equal))
+        (is (member '(bob foaf@age 30) loaded-triples :test #'equal))
+        (is (member '(charlie rdf@type foaf@Person) loaded-triples :test #'equal))))
+
+    (delete-file tmpfile)))
+
+(test load-graph-el-format-conversion
+  "Test load-graph auto-converts el-rdf format to cl-rdf"
+  (let* ((tmpfile (format nil "/tmp/cl-rdf-test-~A.rdf" (get-universal-time)))
+         (el-format-triples '((alice foaf:name "Alice")
+                              (bob foaf:age 30)
+                              (charlie rdf:type foaf:Person))))
+    ;; Write el-rdf format file directly
+    (with-open-file (out tmpfile
+                         :direction :output
+                         :if-exists :supersede)
+      (write el-format-triples :stream out :case :downcase))
+
+    ;; Load and verify conversion
+    (let ((graph (make-graph)))
+      (load-graph graph tmpfile)
+      (let ((loaded-triples (triples '(t t t) graph)))
+        (is (= 3 (length loaded-triples)))
+        ;; Should be converted to cl-rdf format
+        (is (member '(alice foaf@name "Alice") loaded-triples :test #'equal))
+        (is (member '(bob foaf@age 30) loaded-triples :test #'equal))
+        (is (member '(charlie rdf@type foaf@Person) loaded-triples :test #'equal))))
+
+    (delete-file tmpfile)))
+
+(test save-preserves-content-references
+  "Test save-graph preserves content references"
+  (let* ((graph (make-graph))
+         (large-content (make-string 1500 :initial-element #\x))
+         (tmpfile (format nil "/tmp/cl-rdf-test-~A.rdf" (get-universal-time))))
+    (add-triple 'alice 'foaf@bio large-content graph)
+
+    ;; Save and check raw triples have reference
+    (save-graph graph tmpfile)
+
+    ;; Load and verify content is resolved
+    (let ((loaded-graph (make-graph)))
+      (load-graph loaded-graph tmpfile)
+      (let ((loaded-triples (triples '(alice foaf@bio t) loaded-graph)))
+        (is (= 1 (length loaded-triples)))
+        (is (equal large-content (third (first loaded-triples))))))
+
+    (delete-file tmpfile)))
+
+(test save-graph-empty
+  "Test save-graph handles empty graph"
+  (let* ((graph (make-graph))
+         (tmpfile (format nil "/tmp/cl-rdf-test-~A.rdf" (get-universal-time))))
+    (save-graph graph tmpfile)
+    (is (probe-file tmpfile))
+
+    (let ((loaded-graph (make-graph)))
+      (load-graph loaded-graph tmpfile)
+      (is (null (triples '(t t t) loaded-graph))))
+
+    (delete-file tmpfile)))
+
+(test load-graph-nonexistent-file
+  "Test load-graph handles missing files gracefully"
+  (let ((graph (make-graph)))
+    (signals error
+      (load-graph graph "/nonexistent/path/file.rdf"))))
+
+(test save-graph-symbols-with-hash
+  "Test save-graph handles symbols with # character"
+  (let* ((graph (make-graph))
+         (tmpfile (format nil "/tmp/cl-rdf-test-~A.rdf" (get-universal-time))))
+    (add-triple '|resource#1| 'foaf@name "Test" graph)
+    (save-graph graph tmpfile)
+
+    (let ((loaded-graph (make-graph)))
+      (load-graph loaded-graph tmpfile)
+      (let ((loaded-triples (triples '(t t t) loaded-graph)))
+        (is (= 1 (length loaded-triples)))
+        (is (equal '(|resource#1| foaf@name "Test") (first loaded-triples)))))
+
+    (delete-file tmpfile)))
+
+;;; ============================================================================
+;;; Phase 10-12: Additional test suites
 ;;; ============================================================================
 
 ;; Tests for remaining phases will be added as implementation progresses
