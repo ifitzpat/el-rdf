@@ -1793,7 +1793,7 @@ Examples:
   (if (symbolp symbol)
       (let ((name (symbol-name symbol)))
         (if (find #\@ name)
-            (intern (substitute #\: #\@ name))
+            (intern (substitute #\: #\@ name) (symbol-package symbol))
             symbol))
       symbol))
 
