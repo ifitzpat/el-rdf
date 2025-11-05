@@ -370,3 +370,69 @@ See also: ADD-TRIPLES, DELETE-TRIPLE, TRIPLES"
           (setf (gethash predicate pos) `((,object . ,(list subject)))))))
 
   nil)
+
+(defun delete-triple (triple graph)
+  "Remove a single RDF triple from the graph, maintaining all three indices.
+
+This function is the inverse of ADD-TRIPLE. It removes a triple from all three
+indices (SPO, OSP, POS) and automatically cleans up empty entries using REMHASH
+when no triples remain for a given key.
+
+Arguments:
+  TRIPLE - A list of three elements: (subject predicate object)
+  GRAPH  - A graph object (CLOS instance)
+
+Returns:
+  NIL (modifies graph in place)
+
+Side Effects:
+  - Updates graph-spo hash table (removes or updates entry)
+  - Updates graph-osp hash table (removes or updates entry)
+  - Updates graph-pos hash table (removes or updates entry)
+  - Uses REMHASH to completely remove keys when they become empty
+
+Normalization:
+  - rdf@type is automatically converted to 'a for lookup
+  - This matches the normalization done in ADD-TRIPLE
+
+Examples:
+  (delete-triple '(John schema@name \"John Doe\") g)
+  (delete-triple '(John rdf@type schema@Person) g)  ; Looks up as 'a
+
+See also: ADD-TRIPLE, DELETE-TRIPLES, TRIPLES"
+  (let* ((subject (first triple))
+         ;; Normalize rdf@type to 'a to match storage format
+         (predicate (if (eq (second triple) 'rdf@type) 'a (second triple)))
+         (object (third triple))
+         (spo (graph-spo graph))
+         (osp (graph-osp graph))
+         (pos (graph-pos graph)))
+
+    ;; Remove from SPO index: subject -> ((predicate . (objects...)))
+    (let ((po (gethash subject spo)))
+      (when po
+        (let ((updated-po (remove-dual predicate object po)))
+          (if updated-po
+              (setf (gethash subject spo) updated-po)
+              ;; No predicates left for this subject - remove entirely
+              (remhash subject spo)))))
+
+    ;; Remove from OSP index: object -> ((subject . (predicates...)))
+    (let ((sp (gethash object osp)))
+      (when sp
+        (let ((updated-sp (remove-dual subject predicate sp)))
+          (if updated-sp
+              (setf (gethash object osp) updated-sp)
+              ;; No subjects left for this object - remove entirely
+              (remhash object osp)))))
+
+    ;; Remove from POS index: predicate -> ((object . (subjects...)))
+    (let ((os (gethash predicate pos)))
+      (when os
+        (let ((updated-os (remove-dual object subject os)))
+          (if updated-os
+              (setf (gethash predicate pos) updated-os)
+              ;; No objects left for this predicate - remove entirely
+              (remhash predicate pos))))))
+
+  nil)
