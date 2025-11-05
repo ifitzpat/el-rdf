@@ -1863,7 +1863,179 @@
     (is (null result))))
 
 ;;; ============================================================================
-;;; Phase 8-12: Additional test suites
+;;; Phase 8: Content Reference System Tests
+;;; ============================================================================
+
+(in-suite :storage)
+
+(test content-reference-p-valid
+  "Test content-reference-p recognizes valid file references"
+  (is (content-reference-p "file:content-abc123.txt"))
+  (is (content-reference-p "file:content-1234567890abcdef.txt")))
+
+(test content-reference-p-invalid
+  "Test content-reference-p rejects invalid formats"
+  (is (not (content-reference-p "regular string")))
+  (is (not (content-reference-p "file:other.txt")))
+  (is (not (content-reference-p "content-abc123.txt")))
+  (is (not (content-reference-p "")))
+  (is (not (content-reference-p nil)))
+  (is (not (content-reference-p 42))))
+
+(test store-large-content-basic
+  "Test store-large-content creates file reference for large strings"
+  (let* ((large-content (make-string 1500 :initial-element #\x))
+         (reference (store-large-content large-content)))
+    (is (stringp reference))
+    (is (content-reference-p reference))
+    (is (alexandria:starts-with-subseq "file:content-" reference))
+    (is (alexandria:ends-with-subseq ".txt" reference))))
+
+(test store-large-content-small-unchanged
+  "Test store-large-content returns small strings unchanged"
+  (let* ((small-content "This is a short string")
+         (result (store-large-content small-content)))
+    (is (equal result small-content))))
+
+(test store-large-content-threshold
+  "Test store-large-content at 1000 character threshold"
+  (let* ((at-threshold (make-string 1000 :initial-element #\a))
+         (below-threshold (make-string 999 :initial-element #\b))
+         (above-threshold (make-string 1001 :initial-element #\c)))
+    ;; At or below threshold should be unchanged
+    (is (equal at-threshold (store-large-content at-threshold)))
+    (is (equal below-threshold (store-large-content below-threshold)))
+    ;; Above threshold should be a reference
+    (is (content-reference-p (store-large-content above-threshold)))))
+
+(test store-large-content-deduplication
+  "Test store-large-content produces same hash for same content"
+  (let* ((content1 (make-string 1500 :initial-element #\z))
+         (content2 (make-string 1500 :initial-element #\z))
+         (ref1 (store-large-content content1))
+         (ref2 (store-large-content content2)))
+    ;; Same content should produce same reference
+    (is (equal ref1 ref2))))
+
+(test store-large-content-different-hashes
+  "Test store-large-content produces different hashes for different content"
+  (let* ((content1 (make-string 1500 :initial-element #\a))
+         (content2 (make-string 1500 :initial-element #\b))
+         (ref1 (store-large-content content1))
+         (ref2 (store-large-content content2)))
+    ;; Different content should produce different references
+    (is (not (equal ref1 ref2)))))
+
+(test resolve-content-reference-basic
+  "Test resolve-content-reference reads stored content"
+  (let* ((original-content (make-string 1500 :initial-element #\q))
+         (reference (store-large-content original-content))
+         (resolved (resolve-content-reference reference)))
+    (is (equal original-content resolved))))
+
+(test resolve-content-reference-non-reference
+  "Test resolve-content-reference returns non-references unchanged"
+  (let ((regular-string "not a reference"))
+    (is (equal regular-string (resolve-content-reference regular-string)))))
+
+(test resolve-content-reference-missing-file
+  "Test resolve-content-reference handles missing files gracefully"
+  (let ((fake-reference "file:content-nonexistent123.txt"))
+    ;; Should either return the reference unchanged or signal an error
+    ;; Implementation can choose appropriate behavior
+    (handler-case
+        (let ((result (resolve-content-reference fake-reference)))
+          (is (or (equal result fake-reference)
+                  (null result))))
+      (error () (pass)))))
+
+(test process-triple-object-large-string
+  "Test process-triple-object converts large strings to references"
+  (let* ((large-obj (make-string 1500 :initial-element #\m))
+         (processed (process-triple-object large-obj)))
+    (is (content-reference-p processed))))
+
+(test process-triple-object-small-string
+  "Test process-triple-object leaves small strings unchanged"
+  (let* ((small-obj "small")
+         (processed (process-triple-object small-obj)))
+    (is (equal processed small-obj))))
+
+(test process-triple-object-non-string
+  "Test process-triple-object leaves non-strings unchanged"
+  (is (equal 42 (process-triple-object 42)))
+  (is (equal 'symbol (process-triple-object 'symbol)))
+  (is (equal nil (process-triple-object nil))))
+
+(test resolve-triple-object-with-reference
+  "Test resolve-triple-object resolves file references in triples"
+  (let* ((original-content (make-string 1500 :initial-element #\r))
+         (reference (store-large-content original-content))
+         (triple (list 'subj 'pred reference))
+         (resolved-triple (resolve-triple-object triple)))
+    (is (equal (list 'subj 'pred original-content) resolved-triple))))
+
+(test resolve-triple-object-without-reference
+  "Test resolve-triple-object leaves regular triples unchanged"
+  (let* ((triple '(alice foaf@name "Alice"))
+         (resolved (resolve-triple-object triple)))
+    (is (equal triple resolved))))
+
+(test resolve-triple-objects-batch
+  "Test resolve-triple-objects resolves multiple triples"
+  (let* ((content1 (make-string 1500 :initial-element #\x))
+         (content2 (make-string 1500 :initial-element #\y))
+         (ref1 (store-large-content content1))
+         (ref2 (store-large-content content2))
+         (triples (list (list 'subj1 'pred1 ref1)
+                        (list 'subj2 'pred2 "small")
+                        (list 'subj3 'pred3 ref2)))
+         (resolved (resolve-triple-objects triples)))
+    (is (= 3 (length resolved)))
+    (is (equal content1 (third (first resolved))))
+    (is (equal "small" (third (second resolved))))
+    (is (equal content2 (third (third resolved))))))
+
+(test content-reference-integration-add-triple
+  "Test content references are created automatically when adding triples"
+  (let* ((graph (make-graph))
+         (large-bio (make-string 1500 :initial-element #\L)))
+    ;; Add triple with large object
+    (add-triple 'alice 'foaf@bio large-bio graph)
+    ;; Get raw triple (should have reference)
+    (let ((raw (raw-triples '(alice foaf@bio t) graph)))
+      (is (= 1 (length raw)))
+      (is (content-reference-p (third (first raw)))))))
+
+(test content-reference-integration-triples
+  "Test triples function resolves content references automatically"
+  (let* ((graph (make-graph))
+         (large-bio (make-string 1500 :initial-element #\B)))
+    ;; Add triple with large object
+    (add-triple 'bob 'foaf@bio large-bio graph)
+    ;; Get resolved triple
+    (let ((resolved (triples '(bob foaf@bio t) graph)))
+      (is (= 1 (length resolved)))
+      (is (equal large-bio (third (first resolved)))))))
+
+(test content-reference-roundtrip
+  "Test complete roundtrip: store large content, add to graph, retrieve"
+  (let* ((graph (make-graph))
+         (large-desc (concatenate 'string
+                                   "This is a very long description that exceeds "
+                                   "the 1000 character threshold for content references. "
+                                   (make-string 900 :initial-element #\x))))
+    ;; Add triple with large content
+    (add-triple 'project 'dc@description large-desc graph)
+    ;; Retrieve via raw-triples (should have reference)
+    (let ((raw (raw-triples '(project dc@description t) graph)))
+      (is (content-reference-p (third (first raw)))))
+    ;; Retrieve via triples (should have resolved content)
+    (let ((resolved (triples '(project dc@description t) graph)))
+      (is (equal large-desc (third (first resolved)))))))
+
+;;; ============================================================================
+;;; Phase 9-12: Additional test suites
 ;;; ============================================================================
 
 ;; Tests for remaining phases will be added as implementation progresses
