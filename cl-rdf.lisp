@@ -1207,7 +1207,12 @@ Examples:
             (format nil "~A@~A" namespace resource-string))
            ((find #\: resource-string :test #'char=)
             (let ((expanded (expand-prefixed-iri graph resource-string)))
-              (substitute #\@ #\: expanded)))
+              ;; If expanded to full IRI, compress back with @
+              (if (string= expanded resource-string)
+                  ;; Not expanded, just substitute : with @
+                  (substitute #\@ #\: resource-string)
+                  ;; Was expanded, compress IRI with registered prefixes
+                  (%compress-iri-with-prefix expanded (graph-prefixes graph)))))
            (t resource-string))))
     (intern final-resource)))
 
