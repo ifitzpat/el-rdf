@@ -535,3 +535,51 @@ See also: ADD-TRIPLE, DELETE-TRIPLES, GRAPH-ADD-HOOKS"
         (graph-add-hooks graph))
 
   nil)
+
+(defun delete-triples (triplist graph)
+  "Delete multiple RDF triples from the graph at once.
+
+This is a bulk operation that deletes multiple triples and then triggers all
+registered delete-hooks. Unlike DELETE-TRIPLE (which does NOT trigger hooks),
+DELETE-TRIPLES is the primary way to remove data when hooks need to be notified.
+
+Arguments:
+  TRIPLIST - List of triples, where each triple is (subject predicate object)
+  GRAPH    - A graph object (CLOS instance)
+
+Returns:
+  NIL (modifies graph in place)
+
+Side Effects:
+  - Calls DELETE-TRIPLE for each triple in TRIPLIST
+  - Calls all registered delete-hooks with (graph 'delete-triples triplist)
+
+Hook Protocol:
+  Each hook function receives three arguments:
+    1. GRAPH     - The graph that was modified
+    2. OPERATION - The symbol 'delete-triples
+    3. DATA      - The list of triples that were deleted
+
+Examples:
+  (delete-triples '((John schema@name \"John Doe\")
+                    (John schema@age 30)
+                    (Jane schema@name \"Jane Doe\"))
+                  g)
+
+  ;; With hook
+  (push (lambda (graph op data)
+          (format t \"Deleted ~A triples~%\" (length data)))
+        (graph-delete-hooks g))
+  (delete-triples '((John a schema@Person)) g)
+  ; Prints: \"Deleted 1 triples\"
+
+See also: DELETE-TRIPLE, ADD-TRIPLES, GRAPH-DELETE-HOOKS"
+  ;; Delete all triples
+  (mapc (lambda (triple) (delete-triple triple graph)) triplist)
+
+  ;; Call all delete-hooks
+  (mapc (lambda (hook)
+          (funcall hook graph 'delete-triples triplist))
+        (graph-delete-hooks graph))
+
+  nil)
