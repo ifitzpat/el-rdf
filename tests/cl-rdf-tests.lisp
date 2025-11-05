@@ -1791,6 +1791,77 @@
   "Test filter with empty binding list"
   (is (null (filter (lambda () t) '()))))
 
+;; Tests for filter-exists and filter-not-exists
+
+(test filter-exists-basic
+  "Test filter-exists keeps bindings where pattern matches"
+  (let* ((graph (make-graph))
+         (_ (add-triples '((alice foaf@name "Alice")
+                           (alice foaf@email "alice@example.com")
+                           (bob foaf@name "Bob"))
+                         graph))
+         (where-result (where '(($person foaf@name $name)) graph))
+         (result (filter-exists '(($person foaf@email $email)) graph where-result)))
+    (declare (ignore _))
+    ;; Should only return alice (has email)
+    (is (= 1 (length result)))
+    (is (equal 'alice (cdr (assoc '$person (caar result)))))))
+
+(test filter-not-exists-basic
+  "Test filter-not-exists keeps bindings where pattern doesn't match"
+  (let* ((graph (make-graph))
+         (_ (add-triples '((alice foaf@name "Alice")
+                           (alice foaf@email "alice@example.com")
+                           (bob foaf@name "Bob"))
+                         graph))
+         (where-result (where '(($person foaf@name $name)) graph))
+         (result (filter-not-exists '(($person foaf@email $email)) graph where-result)))
+    (declare (ignore _))
+    ;; Should only return bob (no email)
+    (is (= 1 (length result)))
+    (is (equal 'bob (cdr (assoc '$person (caar result)))))))
+
+(test filter-exists-with-multiple-vars
+  "Test filter-exists with pattern using multiple variables"
+  (let* ((graph (make-graph))
+         (_ (add-triples '((alice foaf@name "Alice")
+                           (alice foaf@knows bob)
+                           (bob foaf@name "Bob")
+                           (bob foaf@knows charlie))
+                         graph))
+         (where-result (where '(($person foaf@name $name)) graph))
+         (result (filter-exists '(($person foaf@knows bob)) graph where-result)))
+    (declare (ignore _))
+    ;; Should only return alice (knows bob)
+    (is (= 1 (length result)))
+    (is (equal 'alice (cdr (assoc '$person (caar result)))))))
+
+(test filter-not-exists-all-match
+  "Test filter-not-exists when pattern matches everything"
+  (let* ((graph (make-graph))
+         (_ (add-triples '((alice foaf@name "Alice")
+                           (alice foaf@age 30)
+                           (bob foaf@name "Bob")
+                           (bob foaf@age 25))
+                         graph))
+         (where-result (where '(($person foaf@name $name)) graph))
+         (result (filter-not-exists '(($person foaf@age $age)) graph where-result)))
+    (declare (ignore _))
+    ;; Should return empty (everyone has age)
+    (is (null result))))
+
+(test filter-exists-no-matches
+  "Test filter-exists when pattern matches nothing"
+  (let* ((graph (make-graph))
+         (_ (add-triples '((alice foaf@name "Alice")
+                           (bob foaf@name "Bob"))
+                         graph))
+         (where-result (where '(($person foaf@name $name)) graph))
+         (result (filter-exists '(($person foaf@email $email)) graph where-result)))
+    (declare (ignore _))
+    ;; Should return empty (nobody has email)
+    (is (null result))))
+
 ;;; ============================================================================
 ;;; Phase 8-12: Additional test suites
 ;;; ============================================================================
