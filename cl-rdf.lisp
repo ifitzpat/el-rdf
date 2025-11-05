@@ -816,3 +816,138 @@ The returned list can be empty if no hooks are registered."
     (:add (graph-add-hooks graph))
     (:delete (graph-delete-hooks graph))
     (:query (graph-query-hooks graph))))
+
+;;; ============================================================================
+;;;; Phase 4: Triple Retrieval
+;;; ============================================================================
+
+(defun transform-a-results-to-rdf-type (triples)
+  "Transform triples containing predicate 'a' to use 'rdf@type' instead.
+
+This function handles the equivalence between 'a' (stored form) and 'rdf@type'
+(query form) for RDF type declarations."
+  (mapcar (lambda (triple)
+            (if (eq (second triple) 'a)
+                (list (first triple) 'rdf@type (third triple))
+                triple))
+          triples))
+
+(defgeneric triples (pattern graph)
+  (:documentation "Retrieve triples from GRAPH matching PATTERN.
+
+PATTERN is a list of three elements (subject predicate object) where each
+element can be:
+  - A concrete value (symbol, string, number) to match exactly
+  - T (wildcard) to match any value
+  - A variable symbol (starts with $) to match any value
+
+The function selects the most efficient index based on which pattern elements
+are concrete:
+  - Concrete subject: Use SPO index
+  - Concrete predicate: Use POS index
+  - Concrete object: Use OSP index
+  - All wildcards: Scan all triples
+
+Handles rdf@type/a equivalence: queries for rdf@type will match triples stored
+with predicate 'a', and results will show rdf@type.
+
+Returns: List of matching triples as (subject predicate object) lists.
+
+Examples:
+  (triples '(alice@person t t) g)              ; All triples about alice@person
+  (triples '(t foaf@name t) g)                 ; All name triples
+  (triples '(t t \"Alice\") g)                   ; All triples with object \"Alice\"
+  (triples '(t rdf@type foaf@Person) g)        ; All instances of foaf@Person
+  (triples '($subject foaf@name $name) g)      ; Variables work like wildcards"))
+
+(defmethod triples (pattern (graph local-graph))
+  "Retrieve triples from a local in-memory graph matching PATTERN.
+
+Selects the appropriate index based on the pattern to optimize query performance."
+  (let ((s (first pattern))
+        (p (second pattern))
+        (o (third pattern)))
+    (let ((raw-results
+           (cond
+             ;; Subject is concrete - use SPO index
+             ((not (var-or-wildp s))
+              (let ((results (expand-duals (gethash s (graph-spo graph)) s)))
+                (if (eq p 'rdf@type)
+                    (transform-a-results-to-rdf-type results)
+                    results)))
+             ;; Predicate is concrete - use POS index
+             ((not (var-or-wildp p))
+              (if (eq p 'rdf@type)
+                  ;; Query for rdf@type but 'a' is stored, so look up 'a' and transform
+                  (let ((a-results (expand-duals (gethash 'a (graph-pos graph)) 'a 'pos)))
+                    (transform-a-results-to-rdf-type a-results))
+                  ;; Normal predicate lookup
+                  (expand-duals (gethash p (graph-pos graph)) p 'pos)))
+             ;; Object is concrete - use OSP index
+             ((not (var-or-wildp o))
+              (let ((results (expand-duals (gethash o (graph-osp graph)) o 'osp)))
+                (if (eq p 'rdf@type)
+                    (transform-a-results-to-rdf-type results)
+                    results)))
+             ;; Universal pattern - all triples
+             (t
+              (let ((result nil)
+                    (spo-table (graph-spo graph)))
+                ;; Collect all keys and process them
+                (maphash (lambda (key value)
+                           (setf result (append (expand-duals value key) result)))
+                         spo-table)
+                result)))))
+      ;; TODO Phase 8: Add content reference resolution here
+      ;; For now, just return raw results (no content refs implemented yet)
+      raw-results)))
+
+(defgeneric raw-triples (pattern graph)
+  (:documentation "Retrieve triples from GRAPH matching PATTERN without resolving content references.
+
+Like TRIPLES, but returns raw data without resolving content references.
+Used for checkpointing to preserve file references.
+
+Currently identical to TRIPLES since content references are not yet implemented
+(Phase 8).
+
+See TRIPLES for detailed documentation of pattern matching."))
+
+(defmethod raw-triples (pattern (graph local-graph))
+  "Retrieve triples from local graph without resolving content references.
+
+Currently identical to TRIPLES implementation since content reference system
+is not yet implemented. Will differ in Phase 8 when content references are added."
+  (let ((s (first pattern))
+        (p (second pattern))
+        (o (third pattern)))
+    (cond
+      ;; Subject is concrete - use SPO index
+      ((not (var-or-wildp s))
+       (let ((results (expand-duals (gethash s (graph-spo graph)) s)))
+         (if (eq p 'rdf@type)
+             (transform-a-results-to-rdf-type results)
+             results)))
+      ;; Predicate is concrete - use POS index
+      ((not (var-or-wildp p))
+       (if (eq p 'rdf@type)
+           ;; Query for rdf@type but 'a' is stored, so look up 'a' and transform
+           (let ((a-results (expand-duals (gethash 'a (graph-pos graph)) 'a 'pos)))
+             (transform-a-results-to-rdf-type a-results))
+           ;; Normal predicate lookup
+           (expand-duals (gethash p (graph-pos graph)) p 'pos)))
+      ;; Object is concrete - use OSP index
+      ((not (var-or-wildp o))
+       (let ((results (expand-duals (gethash o (graph-osp graph)) o 'osp)))
+         (if (eq p 'rdf@type)
+             (transform-a-results-to-rdf-type results)
+             results)))
+      ;; Universal pattern - all triples
+      (t
+       (let ((result nil)
+             (spo-table (graph-spo graph)))
+         ;; Collect all keys and process them
+         (maphash (lambda (key value)
+                    (setf result (append (expand-duals value key) result)))
+                  spo-table)
+         result)))))
