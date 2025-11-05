@@ -2930,3 +2930,216 @@ someProperty schema:label \"some property\" ." out))
 ;;; ============================================================================
 ;;; End of Test Suites
 ;;; ============================================================================
+
+;;; ============================================================================
+;;; HTTP Server and Remote Graph Tests
+;;; ============================================================================
+
+(in-suite :http)
+
+(test sexp-serialization
+  "Test S-expression serialization/deserialization"
+  ;; Simple data
+  (let* ((data '(:operation triples :pattern (alice t t)))
+         (serialized (cl-rdf::%write-sexp-to-string data))
+         (deserialized (cl-rdf::%read-sexp-safely serialized)))
+    (is (equal data deserialized)))
+
+  ;; Nested structures
+  (let* ((data '(:graph "test" :triples ((alice foaf@name "Alice")
+                                          (bob foaf@knows alice))))
+         (serialized (cl-rdf::%write-sexp-to-string data))
+         (deserialized (cl-rdf::%read-sexp-safely serialized)))
+    (is (equal data deserialized)))
+
+  ;; With symbols containing special chars
+  (let* ((data '(wn30schema@seeAlso rdf@type owl@ObjectProperty))
+         (serialized (cl-rdf::%write-sexp-to-string data))
+         (deserialized (cl-rdf::%read-sexp-safely serialized)))
+    (is (equal data deserialized))))
+
+(test graph-registry
+  "Test graph registration for HTTP access"
+  (let ((graph (make-graph)))
+    ;; Register
+    (cl-rdf::register-graph-for-http "test-graph" graph)
+    (is (eq graph (cl-rdf::%get-graph-from-registry "test-graph")))
+
+    ;; Unregister
+    (is (cl-rdf::unregister-graph-for-http "test-graph"))
+    (is (null (cl-rdf::%get-graph-from-registry "test-graph")))))
+
+(test server-lifecycle
+  "Test server start/stop"
+  ;; Stop any existing server
+  (when cl-rdf::*server*
+    (stop-server))
+
+  ;; Start server
+  (let ((server (start-server :port 18080 :token "test-token")))
+    (is (not (null server)))
+    (is (eq server cl-rdf::*server*))
+
+    ;; Verify it's running
+    (sleep 0.5)  ; Give server time to start
+
+    ;; Stop server
+    (is (stop-server))
+    (is (null cl-rdf::*server*))
+
+    ;; Stop when not running
+    (is (not (stop-server)))))
+
+(test remote-graph-triples
+  "Test remote graph triples operation"
+  ;; Setup: local graph with data
+  (let ((local-graph (make-graph)))
+    (add-triples '((alice foaf@name "Alice")
+                   (alice foaf@knows bob)
+                   (bob foaf@name "Bob"))
+                 local-graph)
+
+    ;; Register and start server
+    (cl-rdf::register-graph-for-http "test" local-graph)
+    (start-server :port 18081 :token "secret")
+
+    (sleep 0.5)  ; Give server time to start
+
+    (unwind-protect
+        (progn
+          ;; Create remote graph client
+          (let ((remote (make-remote-graph :url "http://localhost:18081"
+                                           :graph-name "test"
+                                           :token "secret")))
+
+            ;; Query via remote graph
+            (let ((results (triples '(alice t t) remote)))
+              (is (= 2 (length results)))
+              (is (member '(alice foaf@name "Alice") results :test #'equal))
+              (is (member '(alice foaf@knows bob) results :test #'equal)))
+
+            ;; Query specific predicate
+            (let ((results (triples '(t foaf@name t) remote)))
+              (is (= 2 (length results))))))
+
+      ;; Cleanup
+      (stop-server)
+      (cl-rdf::unregister-graph-for-http "test"))))
+
+(test remote-graph-add-delete
+  "Test remote graph add and delete operations"
+  (let ((local-graph (make-graph)))
+    ;; Register and start server
+    (cl-rdf::register-graph-for-http "test" local-graph)
+    (start-server :port 18082 :token "secret")
+
+    (sleep 0.5)
+
+    (unwind-protect
+        (let ((remote (make-remote-graph :url "http://localhost:18082"
+                                         :graph-name "test"
+                                         :token "secret")))
+
+          ;; Add via remote
+          (add-triple '(alice foaf@name "Alice") remote)
+
+          ;; Verify in local graph
+          (is (= 1 (length (triples '(t t t) local-graph))))
+
+          ;; Add multiple
+          (add-triples '((bob foaf@name "Bob")
+                        (charlie foaf@name "Charlie"))
+                      remote)
+
+          (is (= 3 (length (triples '(t t t) local-graph))))
+
+          ;; Delete via remote
+          (delete-triple '(alice foaf@name "Alice") remote)
+
+          (is (= 2 (length (triples '(t t t) local-graph)))))
+
+      ;; Cleanup
+      (stop-server)
+      (cl-rdf::unregister-graph-for-http "test"))))
+
+(test remote-graph-query
+  "Test remote graph complex queries"
+  (let ((local-graph (make-graph)))
+    (add-triples '((alice foaf@name "Alice")
+                   (alice foaf@age 30)
+                   (bob foaf@name "Bob")
+                   (bob foaf@age 25))
+                 local-graph)
+
+    ;; Register and start server
+    (cl-rdf::register-graph-for-http "test" local-graph)
+    (start-server :port 18083 :token "secret")
+
+    (sleep 0.5)
+
+    (unwind-protect
+        (let ((remote (make-remote-graph :url "http://localhost:18083"
+                                         :graph-name "test"
+                                         :token "secret")))
+
+          ;; Execute query
+          (let ((results (graph-query '((($s foaf@name $name))) remote)))
+            (is (= 2 (length results)))
+            ;; Check bindings structure
+            (is (assoc '$s (first results)))
+            (is (assoc '$name (first results)))))
+
+      ;; Cleanup
+      (stop-server)
+      (cl-rdf::unregister-graph-for-http "test"))))
+
+(test remote-graph-authentication
+  "Test bearer token authentication"
+  (let ((local-graph (make-graph)))
+    (add-triple '(alice foaf@name "Alice") local-graph)
+
+    ;; Register and start server with token
+    (cl-rdf::register-graph-for-http "test" local-graph)
+    (start-server :port 18084 :token "correct-token")
+
+    (sleep 0.5)
+
+    (unwind-protect
+        (progn
+          ;; Should work with correct token
+          (let ((remote (make-remote-graph :url "http://localhost:18084"
+                                           :graph-name "test"
+                                           :token "correct-token")))
+            (is (not (null (triples '(t t t) remote)))))
+
+          ;; Should fail with wrong token
+          (let ((remote (make-remote-graph :url "http://localhost:18084"
+                                           :graph-name "test"
+                                           :token "wrong-token")))
+            (signals error (triples '(t t t) remote)))
+
+          ;; Should fail with no token
+          (let ((remote (make-remote-graph :url "http://localhost:18084"
+                                           :graph-name "test"
+                                           :token nil)))
+            (signals error (triples '(t t t) remote))))
+
+      ;; Cleanup
+      (stop-server)
+      (cl-rdf::unregister-graph-for-http "test"))))
+
+(test health-check-endpoint
+  "Test health check endpoint"
+  (start-server :port 18085)
+  (sleep 0.5)
+
+  (unwind-protect
+      (let ((response (drakma:http-request "http://localhost:18085/health")))
+        (is (search ":status" (flexi-streams:octets-to-string response))))
+
+    ;; Cleanup
+    (stop-server)))
+
+;;; ============================================================================
+;;; End of HTTP Tests
+;;; ============================================================================

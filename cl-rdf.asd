@@ -15,10 +15,13 @@
                #:ironclad          ; For MD5 hashing (content references)
                #:log4cl            ; Logging framework
                #:cl-ppcre          ; Regular expressions (TTL import)
+               #:hunchentoot       ; HTTP server
+               #:drakma            ; HTTP client
                #:uiop)             ; Portable pathname/filesystem operations
 
   :components ((:file "package")
-               (:file "cl-rdf" :depends-on ("package")))
+               (:file "cl-rdf" :depends-on ("package"))
+               (:file "http-server" :depends-on ("package" "cl-rdf")))
 
   :in-order-to ((test-op (test-op #:cl-rdf/tests))))
 
@@ -63,11 +66,14 @@
                #:ironclad
                #:log4cl
                #:cl-ppcre
+               #:hunchentoot
+               #:drakma
                #:uiop)
 
   ;; Use same source code as main system
   :components ((:file "package")
-               (:file "cl-rdf" :depends-on ("package")))
+               (:file "cl-rdf" :depends-on ("package"))
+               (:file "http-server" :depends-on ("package" "cl-rdf")))
 
   ;; Apply aggressive optimization settings during compilation
   :around-compile (lambda (next)

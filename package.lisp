@@ -122,4 +122,13 @@
            ;; Phase 13: cl-rdf → el-rdf (bidirectional)
            #:convert-symbol-cl-to-elisp
            #:convert-triple-cl-to-elisp
-           #:save-for-elisp))
+           #:save-for-elisp)
+
+  ;; HTTP Server & Remote Graph
+  (:export #:start-server
+           #:stop-server
+           #:*server*
+           #:remote-graph
+           #:make-remote-graph
+           #:remote-graph-url
+           #:remote-graph-token))

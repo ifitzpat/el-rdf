@@ -42,3 +42,7 @@
 (def-suite :visualization
     :in :cl-rdf
     :description "Graph visualization and rendering")
+
+(def-suite :http
+    :in :cl-rdf
+    :description "HTTP server and remote graph")
