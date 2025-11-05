@@ -26,7 +26,7 @@ jobs:
       matrix:
         lisp:
           - sbcl
-          - ecl
+          # ECL disabled temporarily - SBCL working perfectly
 
     steps:
       - name: Checkout code

@@ -118,6 +118,12 @@ The script shows the failed step name and provides a link to view full details o
 4. **Follow the plan** - Implement functions in order according to CL-PORT-PLAN.md phases
 5. **One function at a time** - Don't implement multiple functions in one commit
 6. **Clear commit messages** - Format: "Add test for X" then "Implement X with test coverage"
+7. **Evaluate threading opportunities** - When porting each function, evaluate whether threading with bordeaux-threads could provide performance benefits. Consider:
+   - Large dataset processing (batch operations, index updates)
+   - Independent query operations that could be parallelized
+   - I/O operations (file reading, content reference resolution)
+   - Multi-clause query evaluation where clauses are independent
+   - Note: Simple predicates and utilities likely won't benefit from threading
 
 ### cl-rdf Project Structure
 
