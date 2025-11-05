@@ -943,28 +943,48 @@ git commit -m "Implement function-name with tests"
 - All functions under 30-line limit ✅
 - **TODO**: Nested OPTIONAL not yet supported (documented limitation)
 
-✅ **Phase 7: Query Operations (Partial - ASK, CONSTRUCT, DELETE-DATA)** (4/4 functions)
+✅ **Phase 7: Query Operations (Complete)** (11/11 functions)
+
+**Boolean Queries**:
 - `ask` - Boolean query with error handling (13 lines)
+
+**Triple Construction**:
 - `expand-list-bindings` - Expand list objects into multiple triples (14 lines)
 - `construct` - Build triples from template + bindings (10 lines)
+
+**Pattern-Based Deletion**:
 - `delete-data` - Pattern-based deletion with hooks (13 lines)
 
-**Implementation Notes**:
-- All functions use handler-case for graceful error handling
-- ASK returns NIL on pattern-match-failure (never signals error)
-- CONSTRUCT integrates with expand-list-bindings for list expansion
-- DELETE-DATA uses graph-query + construct + delete-triples pipeline
-- 29 comprehensive test cases covering all scenarios
-- All functions under 30-line limit ✅
+**Variable Projection (SELECT)**:
+- `binding-val` - Extract value for variable from bindings (5 lines)
+- `bindings-from-row` - Extract multiple variables from row (10 lines)
+- `select` - Project variables from WHERE results (20 lines)
 
-**Deferred for discussion**:
-- SELECT and related helpers (binding-val, bindings-from-row)
-- FILTER and related helpers (eval-with-bindings)
+**Filtering**:
+- `eval-with-bindings` - Dynamic variable binding with EVAL (18 lines)
+- `filter` - Filter bindings by predicate (12 lines)
+- `filter-exists` - SPARQL FILTER EXISTS equivalent (12 lines)
+- `filter-not-exists` - SPARQL FILTER NOT EXISTS equivalent (12 lines)
+
+**Implementation Notes**:
+- ASK, CONSTRUCT, DELETE-DATA use handler-case for graceful error handling
+- SELECT implements SPARQL partial match semantics (returns nil values on failure)
+- FILTER uses EVAL for maximum flexibility (security implications documented)
+- FILTER-EXISTS/NOT-EXISTS provide SPARQL pattern-based filtering
+- 60 comprehensive test cases (29 ASK/CONSTRUCT/DELETE + 31 SELECT/FILTER)
+- All functions under 30-line limit ✅
+- Emphasize `where` alias in documentation (Option C from discussion)
+
+**Missing SPARQL Features** (documented for future):
+- Nested FILTER EXISTS/NOT EXISTS
+- DISTINCT, ORDER BY, LIMIT/OFFSET
+- Aggregation (GROUP BY, COUNT, etc.)
 
 ### Current Phase
 
-🔄 **Phase 7: Query Operations (SELECT, FILTER)** - Awaiting user discussion
-- See lines 227-262 for complete Phase 7 details
+🔄 **Phase 8: Content Reference System** (0/? functions)
+- Next phase to be implemented
+- See lines 253-268 for details
 
 ## Next Steps
 
@@ -981,8 +1001,8 @@ git commit -m "Implement function-name with tests"
 11. ✅ Complete Phase 4: Triple Retrieval (2/2)
 12. ✅ Complete Phase 5: Pattern Matching (5/5)
 13. ✅ Complete Phase 6: Query Execution Engine (13/13 + condition system)
-14. ✅ Complete Phase 7 (Partial): ASK, CONSTRUCT, DELETE-DATA (4/4)
-15. 🔄 Discuss and implement SELECT and FILTER (Phase 7 remainder)
+14. ✅ Complete Phase 7: Query Operations (11/11 - ASK, SELECT, FILTER, CONSTRUCT, DELETE-DATA)
+15. 🔄 Begin Phase 8: Content Reference System
 
 ---
 
