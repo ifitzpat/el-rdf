@@ -18,15 +18,19 @@ This document outlines the plan for porting `el-rdf.el` to Common Lisp as `cl-rd
 
 **Solutions Considered**:
 1. Use strings for all RDF resources (most portable but less convenient)
-2. Use a different separator like `/` or `-` (e.g., `namespace/resource`)
+2. Use a different separator like `/` or `.` (e.g., `namespace/resource`)
 3. Use symbols with escaped colons (e.g., `|namespace:resource|`)
-4. Implement a custom reader macro
+4. Use `|` as separator (e.g., `namespace|resource`) - **doesn't work, needs outer bars**
+5. Implement a custom reader macro
 
-**Chosen Solution**: Use **symbols with vertical bars** for RDF resources: `|namespace:resource|`
-- Preserves visual similarity to original
-- Works with existing CL reader
-- Allows querying with standard symbol operations
-- Recommendation: Provide helper macro `rdf-sym` to create these: `(rdf-sym "schema:Person")`
+**Chosen Solution**: Use **forward slash separator** for RDF resources: `namespace/resource`
+- ✅ Clean syntax, no escaping needed
+- ✅ Valid CL symbol without special reader syntax
+- ✅ Visually distinct separator
+- ✅ Maps well to URI/RDF conventions
+- ✅ Easy to type and read
+- Helper macro: `(rdf namespace resource)` expands to `namespace/resource`
+- Conversion needed between el-rdf (`:`) and cl-rdf (`/`) formats
 
 ### 2. SPARQL Variables
 
@@ -314,6 +318,7 @@ cl-rdf/
     - `expand-prefixed-iri`
     - `intern-rdf-resource`
     - Test first: Prefix registration and expansion
+    - Note: Convert `:` to `/` when creating symbols
 
 31. **TTL value parsing**
     - `parse-ttl-value`
@@ -534,13 +539,19 @@ Provide compatibility macros for el-rdf users:
 ### Symbol Conversion Utilities
 
 ```lisp
-(defun elisp-symbol-to-rdf (elisp-symbol-name)
-  "Convert elisp symbol name like 'schema:Person' to CL symbol |schema:Person|"
-  (intern elisp-symbol-name))
+(defmacro rdf (namespace resource)
+  "Create RDF symbol: (rdf schema Person) => SCHEMA/PERSON"
+  `(intern (format nil "~A/~A" ',namespace ',resource)))
 
-(defmacro rdf-sym (name-string)
-  "Create RDF symbol from string: (rdf-sym \"schema:Person\") => |schema:Person|"
-  (intern name-string))
+;; Or for string inputs
+(defun make-rdf-symbol (namespace-string resource-string)
+  "Create RDF symbol from strings: (make-rdf-symbol \"schema\" \"Person\") => SCHEMA/PERSON"
+  (intern (format nil "~A/~A" namespace-string resource-string) :cl-rdf))
+
+;; Convert from el-rdf format
+(defun elisp-symbol-to-cl-rdf (elisp-symbol-name)
+  "Convert el-rdf symbol name 'schema:Person' to cl-rdf symbol SCHEMA/PERSON"
+  (intern (substitute #\/ #\: elisp-symbol-name) :cl-rdf))
 ```
 
 ## Documentation
@@ -572,11 +583,106 @@ Create CL-specific documentation covering:
 - Symbol naming conventions
 - Common Lisp-specific features
 
+## Format Conversion Between el-rdf and cl-rdf
+
+### Symbol Format Differences
+
+**el-rdf**: Uses colon separator `namespace:resource`
+**cl-rdf**: Uses forward slash separator `namespace/resource`
+
+### Conversion Functions (TODO - Phase 13)
+
+These functions will enable interoperability between el-rdf and cl-rdf serialized graphs:
+
+```lisp
+(defun convert-symbol-elisp-to-cl (symbol-name)
+  "Convert el-rdf symbol name to cl-rdf format: namespace:resource -> namespace/resource"
+  (substitute #\/ #\: symbol-name))
+
+(defun convert-symbol-cl-to-elisp (symbol-name)
+  "Convert cl-rdf symbol name to el-rdf format: namespace/resource -> namespace:resource"
+  (substitute #\: #\/ symbol-name))
+
+(defun convert-triple-elisp-to-cl (triple)
+  "Convert a triple from el-rdf format to cl-rdf format"
+  (destructuring-bind (subject predicate object) triple
+    (list (convert-element-elisp-to-cl subject)
+          (convert-element-elisp-to-cl predicate)
+          (convert-element-elisp-to-cl object))))
+
+(defun convert-element-elisp-to-cl (element)
+  "Convert a triple element, handling symbols and preserving literals"
+  (cond
+    ((symbolp element)
+     (let ((name (symbol-name element)))
+       (intern (convert-symbol-elisp-to-cl name))))
+    ((stringp element) element)  ; Preserve string literals
+    ((numberp element) element)  ; Preserve numbers
+    (t element)))
+
+(defun load-elisp-graph (filename)
+  "Load a graph saved by el-rdf, converting symbol format"
+  (let ((elisp-triples (with-open-file (in filename) (read in))))
+    (mapcar #'convert-triple-elisp-to-cl elisp-triples)))
+
+(defun save-for-elisp (graph filename)
+  "Save a cl-rdf graph in el-rdf compatible format"
+  (let* ((cl-triples (raw-triples '(t t t) graph))
+         (elisp-triples (mapcar #'convert-triple-cl-to-elisp cl-triples)))
+    (with-open-file (out filename :direction :output :if-exists :supersede)
+      (write elisp-triples :stream out :case :downcase))))
+```
+
+### Test Cases for Conversion
+
+```lisp
+(test symbol-conversion
+  "Test bidirectional symbol conversion"
+  (is (string= "schema/Person"
+               (convert-symbol-elisp-to-cl "schema:Person")))
+  (is (string= "schema:Person"
+               (convert-symbol-cl-to-elisp "schema/Person")))
+
+  ;; Roundtrip test
+  (let ((original "foaf:name"))
+    (is (string= original
+                 (convert-symbol-cl-to-elisp
+                  (convert-symbol-elisp-to-cl original))))))
+
+(test triple-conversion
+  "Test triple conversion preserves literals"
+  (let ((elisp-triple '(|person1| |foaf:name| "John")))
+    (let ((cl-triple (convert-triple-elisp-to-cl elisp-triple)))
+      (is (eq (first cl-triple) 'person1))
+      (is (eq (second cl-triple) 'foaf/name))
+      (is (string= (third cl-triple) "John")))))
+```
+
+### Usage Example
+
+```lisp
+;; Load graph from el-rdf
+(defparameter *g* (make-graph))
+(let ((elisp-triples (load-elisp-graph "saved-by-el-rdf.el")))
+  (add-triples elisp-triples *g*))
+
+;; Save for el-rdf consumption
+(save-for-elisp *g* "for-el-rdf.el")
+```
+
+### Documentation Note
+
+Both el-rdf and cl-rdf documentation should mention:
+1. Symbol format differences
+2. How to convert between formats
+3. When conversion is needed (serialization, not runtime)
+4. Performance implications (conversion overhead)
+
 ## Future Enhancements
 
 ### Beyond Initial Port
 
-1. **CLOS integration**: Use CLOS for better OOP patterns
+1. **CLOS integration**: Use CLOS for better OOP patterns (done in initial port)
 2. **Concurrency**: Add thread-safe operations with locks
 3. **Persistence backends**: Add database backends (PostgreSQL, SQLite)
 4. **SPARQL 1.1**: Expand query language support
@@ -584,6 +690,7 @@ Create CL-specific documentation covering:
 6. **Optimizations**: Profile and optimize hot paths
 7. **RDF/XML**: Add RDF/XML import/export
 8. **N-Triples**: Add N-Triples format support
+9. **Format conversion utilities**: Bidirectional el-rdf ↔ cl-rdf serialization
 
 ## Success Criteria
 
