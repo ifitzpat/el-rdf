@@ -683,6 +683,76 @@
     (is (member hook2 (graph-add-hooks g)))
     (is (= 2 (length (graph-add-hooks g))))))
 
+;; Tests for remove-hook-from-graph
+
+(test remove-hook-from-graph-basic
+  "Test removing a hook from a graph"
+  (let ((g (make-graph))
+        (hook-fn (lambda (graph op data)
+                   (declare (ignore graph op data))
+                   nil)))
+    ;; Add hook first
+    (add-hook-to-graph g :add hook-fn)
+    (is (member hook-fn (graph-add-hooks g)))
+    ;; Remove it
+    (remove-hook-from-graph g :add hook-fn)
+    (is (not (member hook-fn (graph-add-hooks g))))))
+
+(test remove-hook-from-graph-multiple
+  "Test removing one hook while keeping others"
+  (let ((g (make-graph))
+        (hook1 (lambda (graph op data)
+                 (declare (ignore graph op data))
+                 1))
+        (hook2 (lambda (graph op data)
+                 (declare (ignore graph op data))
+                 2)))
+    ;; Add two hooks
+    (add-hook-to-graph g :add hook1)
+    (add-hook-to-graph g :add hook2)
+    ;; Remove one
+    (remove-hook-from-graph g :add hook1)
+    ;; hook1 should be gone, hook2 should remain
+    (is (not (member hook1 (graph-add-hooks g))))
+    (is (member hook2 (graph-add-hooks g)))))
+
+(test remove-hook-from-graph-nonexistent
+  "Test removing a hook that doesn't exist (should not error)"
+  (let ((g (make-graph))
+        (hook-fn (lambda (graph op data)
+                   (declare (ignore graph op data))
+                   nil)))
+    ;; Remove hook that was never added (should not error)
+    (remove-hook-from-graph g :add hook-fn)
+    ;; Should still be empty
+    (is (null (graph-add-hooks g)))))
+
+;; Tests for get-graph-hooks
+
+(test get-graph-hooks-basic
+  "Test getting hooks from a graph"
+  (let ((g (make-graph))
+        (hook1 (lambda (graph op data)
+                 (declare (ignore graph op data))
+                 1))
+        (hook2 (lambda (graph op data)
+                 (declare (ignore graph op data))
+                 2)))
+    ;; Add hooks to different types
+    (add-hook-to-graph g :add hook1)
+    (add-hook-to-graph g :delete hook2)
+    ;; Get hooks by type
+    (is (member hook1 (get-graph-hooks g :add)))
+    (is (member hook2 (get-graph-hooks g :delete)))
+    (is (null (get-graph-hooks g :query)))))
+
+(test get-graph-hooks-empty
+  "Test getting hooks from empty graph"
+  (let ((g (make-graph)))
+    (is (null (get-graph-hooks g :add)))
+    (is (null (get-graph-hooks g :delete)))
+    (is (null (get-graph-hooks g :query)))))
+
 ;;; ============================================================================
 ;;; Phase 4-12: Additional test suites
 ;;; ============================================================================
