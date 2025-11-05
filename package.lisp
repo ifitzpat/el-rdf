@@ -91,8 +91,17 @@
            #:list-checkpoints
            #:delete-checkpoint)
 
-  ;; TTL import
-  (:export #:import-ttl)
+  ;; TTL import (Phase 11)
+  (:export #:import-ttl
+           #:register-prefix
+           #:expand-prefixed-iri
+           #:intern-rdf-resource
+           #:parse-ttl-value
+           #:simple-tokenize-ttl
+           #:parse-rdf-collection
+           #:parse-blank-node-bracket
+           #:parse-simple-ttl-statement
+           #:parse-ttl-content)
 
   ;; Visualization
   (:export #:render-graph

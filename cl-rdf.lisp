@@ -1,2277 +1,878 @@
 ;;;; cl-rdf.lisp --- In-memory RDF triple store for Common Lisp
 
-;;; This is a port of el-rdf.el from Emacs Lisp to Common Lisp.
-;;; See CL-PORT-PLAN.md for the implementation plan.
-
 (in-package #:cl-rdf)
 
-;;; Implementation follows Test-Driven Development:
-;;; 1. Write test first (in tests/cl-rdf-tests.lisp)
-;;; 2. Run test (should fail)
-;;; 3. Implement function
-;;; 4. Run test (should pass)
-;;; 5. Refactor if needed
+;;;; Core Data Structures
 
-;;; Functions are implemented in phases according to CL-PORT-PLAN.md
+(defclass local-graph ()
+  ((spo :initform (make-hash-table :test 'eq)
+        :accessor graph-spo
+        :documentation "Subject-Predicate-Object index")
+   (osp :initform (make-hash-table :test 'eq)
+        :accessor graph-osp
+        :documentation "Object-Subject-Predicate index")
+   (pos :initform (make-hash-table :test 'eq)
+        :accessor graph-pos
+        :documentation "Predicate-Object-Subject index")
+   (add-hooks :initform nil
+              :accessor graph-add-hooks
+              :documentation "List of functions called after add-triples")
+   (delete-hooks :initform nil
+                 :accessor graph-delete-hooks
+                 :documentation "List of functions called after delete-triples")
+   (query-hooks :initform nil
+                :accessor graph-query-hooks
+                :documentation "List of functions called during queries")
+   (name :initform nil
+         :accessor graph-name
+         :documentation "Optional name for the graph")
+   (prefixes :initform nil
+             :accessor graph-prefixes
+             :documentation "Alist of (prefix . namespace-uri) for TTL import"))
+  (:documentation "In-memory RDF graph with triple indices and hooks"))
 
-;;;; ============================================================================
-;;;; Special Variables
-;;;; ============================================================================
+(defmethod print-object ((graph local-graph) stream)
+  "Print representation of a graph"
+  (print-unreadable-object (graph stream :type t :identity t)
+    (format stream "~:[unnamed~;~:*~A~]" (graph-name graph))))
 
-(defvar *debug* nil
-  "Enable debug logging output. Set to T to enable debug messages.")
+;;;; Phase 1: Core Utilities
 
-;;;; ============================================================================
-;;;; Phase 1: Core Data Structures and Utilities
-;;;; ============================================================================
-
-;;; -----------------------------------------------------------------------------
-;;; Graph Structure (CLOS-based with Generic Function Support)
-;;; -----------------------------------------------------------------------------
-
-;;; Abstract Base Class
-
-(defclass graph ()
-  ((name
-    :initarg :name
-    :initform nil
-    :accessor graph-name
-    :documentation "Optional name for graph identification and checkpointing")
-
-   (add-hooks
-    :initform nil
-    :accessor graph-add-hooks
-    :documentation "List of functions called after add-triples operations")
-
-   (delete-hooks
-    :initform nil
-    :accessor graph-delete-hooks
-    :documentation "List of functions called after delete-triples operations")
-
-   (query-hooks
-    :initform nil
-    :accessor graph-query-hooks
-    :documentation "List of functions called during graph-query operations")
-
-   (prefixes
-    :initform nil
-    :accessor graph-prefixes
-    :documentation "Association list of (prefix-string . namespace-uri) pairs for TTL import"))
-  (:documentation "Abstract base class for all graph types.
-
-This class defines the common interface and shared state for all graph
-implementations. Concrete graph types inherit from this class and implement
-the generic CRUD operations.
-
-Subclasses:
-  - LOCAL-GRAPH: In-memory triple-indexed storage
-  - (Future) HTTP-GRAPH: Remote graph via HTTP/REST API
-  - (Future) WEBSOCKET-GRAPH: Remote graph via WebSocket
-  - (Future) REPL-GRAPH: Remote graph via REPL connection
-
-See REMOTE-GRAPHS.md for architecture details."))
-
-;;; Local In-Memory Graph
-
-(defclass local-graph (graph)
-  ((spo
-    :initform (make-hash-table :test 'eq)
-    :accessor graph-spo
-    :documentation "Subject-Predicate-Object index: subject -> ((predicate . (obj1 obj2 ...)))")
-
-   (osp
-    :initform (make-hash-table :test 'equal)
-    :accessor graph-osp
-    :documentation "Object-Subject-Predicate index: object -> ((subject . (pred1 pred2 ...)))")
-
-   (pos
-    :initform (make-hash-table :test 'eq)
-    :accessor graph-pos
-    :documentation "Predicate-Object-Subject index: predicate -> ((object . (subj1 subj2 ...)))")
-
-   (lock
-    :initform (make-lock "graph-lock")
-    :reader graph-lock
-    :documentation "Mutex for thread-safe operations on graph indices"))
-  (:documentation "Local in-memory RDF graph with triple-indexed storage.
-
-The local-graph uses three hash table indices for efficient querying:
-- SPO: Indexed by subject (uses EQ test for symbol keys)
-- OSP: Indexed by object (uses EQUAL test for any type of keys)
-- POS: Indexed by predicate (uses EQ test for symbol keys)
-
-Supports parallel processing for bulk operations (100+ items threshold).
-Thread-safe via per-graph mutex."))
-
-(defun make-graph (&key name)
-  "Create a new local in-memory RDF graph with optional NAME.
-
-Creates a LOCAL-GRAPH instance with triple-indexed storage. This is the
-standard way to create a graph for local in-memory use.
-
-A graph is implemented as a CLOS object with three hash table indices
-for efficient triple storage and retrieval. Each index provides fast
-lookups for different query patterns:
-
-- SPO (Subject-Predicate-Object): Primary index, fast subject lookups
-- OSP (Object-Subject-Predicate): Fast object/value lookups (reverse queries)
-- POS (Predicate-Object-Subject): Fast predicate-based queries
+(defun make-graph (&optional name)
+  "Create a new empty RDF graph.
 
 Arguments:
-  NAME - Optional string name for graph identification and checkpointing.
-         If provided, enables automatic checkpointing via
-         REGISTER-GRAPH-FOR-CHECKPOINTING.
+  NAME - Optional name for the graph (enables checkpointing)
 
 Returns:
-  A new LOCAL-GRAPH object.
+  New local-graph instance
 
 Examples:
-  (make-graph)                    ; Anonymous local graph
-  (make-graph :name \"my-data\")    ; Named local graph for checkpointing
+  (make-graph) => #<LOCAL-GRAPH {10052F3B63}>
+  (make-graph \"my-graph\") => #<LOCAL-GRAPH my-graph {10052F3B63}>"
+  (let ((graph (make-instance 'local-graph)))
+    (when name
+      (setf (graph-name graph) name))
+    graph))
 
-Note: For remote graphs, directly instantiate the appropriate class:
-  (make-instance 'http-graph :endpoint \"https://...\")
+(defun variablep (symbol)
+  "Return T if SYMBOL is a SPARQL variable (starts with $).
 
-See also: LOCAL-GRAPH, ADD-TRIPLE, GRAPH-QUERY, REGISTER-GRAPH-FOR-CHECKPOINTING"
-  (make-instance 'local-graph :name name))
-
-;;; -----------------------------------------------------------------------------
-;;; Basic Predicates
-;;; -----------------------------------------------------------------------------
-
-(defun variablep (x)
-  "Return T if X is a SPARQL variable (symbol starting with $).
-
-Variables are used in query patterns to match any value and capture bindings.
-A symbol is considered a variable if its name begins with the $ character.
+Variables are identified by a leading $ character in the symbol name.
 
 Arguments:
-  X - Any Lisp object to test.
+  SYMBOL - Symbol to test
 
 Returns:
-  T if X is a symbol whose name starts with $, NIL otherwise.
+  T if symbol is a variable, NIL otherwise
 
 Examples:
-  (variablep '$subject)        ; => T
-  (variablep '$name)           ; => T
-  (variablep '$)               ; => T (just $ is a variable)
-  (variablep 'schema.Person)   ; => NIL
-  (variablep \"string\")         ; => NIL
-  (variablep 42)               ; => NIL
-
-See also: VAR-OR-WILDP, GRAPH-QUERY"
-  (and (symbolp x)
-       (let ((name (symbol-name x)))
-         (and (plusp (length name))
+  (variablep '$subject) => T
+  (variablep '$name) => T
+  (variablep 'regular-symbol) => NIL"
+  (and (symbolp symbol)
+       (let ((name (symbol-name symbol)))
+         (and (> (length name) 0)
               (char= (char name 0) #\$)))))
 
-(defun var-or-wildp (x)
-  "Return T if X is a variable or wildcard (t).
+(defun wildcardp (value)
+  "Return T if VALUE is the wildcard symbol T.
 
-A wildcard (the symbol T) matches any value in query patterns without
-binding. Variables (symbols starting with $) match any value and create
-bindings. This predicate is used in pattern matching to determine if a
-pattern element should match any value.
+The symbol T matches any value in patterns.
 
 Arguments:
-  X - Any Lisp object to test.
+  VALUE - Value to test
 
 Returns:
-  T if X is either the symbol T or a variable (starts with $), NIL otherwise.
+  T if value is wildcard, NIL otherwise
 
 Examples:
-  (var-or-wildp t)              ; => T (wildcard)
-  (var-or-wildp '$subject)      ; => T (variable)
-  (var-or-wildp '$name)         ; => T (variable)
-  (var-or-wildp 'schema.Person) ; => NIL (concrete value)
-  (var-or-wildp \"string\")       ; => NIL (not a symbol)
+  (wildcardp t) => T
+  (wildcardp 'foo) => NIL
+  (wildcardp \"bar\") => NIL"
+  (eq value t))
 
-See also: VARIABLEP, PAT-MATCH, TRIPLES"
-  (or (eq x t)
-      (variablep x)))
+(defun var-or-wildp (value)
+  "Return T if VALUE is either a variable or wildcard.
 
-;;; -----------------------------------------------------------------------------
-;;; Blank Node Generation
-;;; -----------------------------------------------------------------------------
+Arguments:
+  VALUE - Value to test
+
+Returns:
+  T if value is variable or wildcard, NIL otherwise
+
+Examples:
+  (var-or-wildp '$x) => T
+  (var-or-wildp t) => T
+  (var-or-wildp 'foo) => NIL"
+  (or (variablep value)
+      (wildcardp value)))
+
+(defvar *bnode-counter* 0
+  "Counter for generating unique blank node identifiers")
 
 (defun bnode ()
   "Generate a unique blank node identifier.
 
-Blank nodes are anonymous RDF resources that have no external identifier.
-They are used to represent intermediate or anonymous entities in RDF graphs.
-This function generates a fresh blank node symbol with the format _@G<number>,
-where <number> is a unique identifier generated by GENSYM.
-
-Note: cl-rdf uses at-sign (@) as separator instead of colon (:) used in el-rdf.
-Blank nodes in cl-rdf use _@ prefix (e.g., _@G1234) instead of _: prefix.
-
 Returns:
-  A symbol representing a unique blank node, starting with _@
+  Symbol of form _:G<number>
 
 Examples:
-  (bnode)  ; => _@G1234 (exact name varies)
-  (bnode)  ; => _@G1235 (different from previous)
-
-  ;; Use in triples
-  (let ((person (bnode)))
-    (add-triple g person 'a 'schema@Person)
-    (add-triple g person 'schema@name \"John Doe\"))
-
-See also: ADD-TRIPLE, IMPORT-TTL"
-  (intern (concatenate 'string \"_@\" (symbol-name (gensym)))))
-
-;;; -----------------------------------------------------------------------------
-;;; Namespace Extraction
-;;; -----------------------------------------------------------------------------
-
-(defun namespace (symbol)
-  "Extract the namespace portion from a namespaced symbol.
-
-RDF resources in cl-rdf use the format namespace@resource (e.g., schema@Person).
-This function extracts the namespace portion (the part before the @).
-
-Arguments:
-  SYMBOL - A symbol potentially containing a namespace.
-
-Returns:
-  A string containing the namespace if the symbol contains @, NIL otherwise.
-
-Examples:
-  (namespace 'schema@Person)  ; => \"schema\"
-  (namespace 'foaf@name)      ; => \"foaf\"
-  (namespace 'rdf@type)       ; => \"rdf\"
-  (namespace 'Person)         ; => NIL (no namespace)
-  (namespace '_@G1234)        ; => NIL (blank node, not a namespace)
-  (namespace '$subject)       ; => NIL (variable, not namespaced)
-
-See also: ADD-TRIPLE, IMPORT-TTL"
-  (let* ((name (symbol-name symbol))
-         (at-pos (position #\@ name)))
-    (when (and at-pos (plusp at-pos))
-      (subseq name 0 at-pos))))
-
-;;;; ============================================================================
-;;;; Phase 2: Triple Storage
-;;;; ============================================================================
-
-;;; -----------------------------------------------------------------------------
-;;; Alist Manipulation Helpers
-;;; -----------------------------------------------------------------------------
-
-(defun update-dual (key val orig)
-  "Add VAL to the list of values associated with KEY in alist ORIG.
-
-This function maintains the triple index structure where each key maps to a
-list of values. If KEY doesn't exist, a new entry is created. If KEY exists,
-VAL is added to its list (unless already present). The function avoids
-duplicate values.
-
-Arguments:
-  KEY  - The key to update (typically a symbol).
-  VAL  - The value to add to the key's list (can be any Lisp object).
-  ORIG - The original alist structure.
-
-Returns:
-  Updated alist with VAL added to KEY's list.
-
-Structure:
-  Input/Output format: ((key1 . (val1 val2 ...)) (key2 . (val3 val4 ...)) ...)
-
-Examples:
-  (update-dual 'subject '(pred . obj) nil)
-  ; => ((subject . ((pred . obj))))
-
-  (update-dual 'subject '(pred2 . obj2) '((subject . ((pred1 . obj1)))))
-  ; => ((subject . ((pred2 . obj2) (pred1 . obj1))))
-
-See also: REMOVE-DUAL, ADD-TRIPLE"
-  (let* ((entry (assoc key orig))
-         (oldval (cdr entry)))
-    (if oldval
-        ;; Key exists - add val if not already present
-        (progn
-          (setf (cdr entry)
-                (if (member val oldval :test #'equal)
-                    oldval
-                    (cons val oldval)))
-          orig)
-        ;; Key doesn't exist - add new entry
-        (append `((,key . ,(list val))) orig))))
-
-(defun remove-dual (key val orig)
-  "Remove VAL from the list of values associated with KEY in alist ORIG.
-
-This function is the inverse of UPDATE-DUAL. It removes a specific value from
-the list associated with a key. If removing the value leaves the list empty,
-the entire key entry is removed from the alist.
-
-Arguments:
-  KEY  - The key to update (typically a symbol).
-  VAL  - The value to remove from the key's list (can be any Lisp object).
-  ORIG - The original alist structure.
-
-Returns:
-  Updated alist with VAL removed from KEY's list. If the list becomes empty,
-  the KEY entry is removed entirely.
-
-Structure:
-  Input/Output format: ((key1 . (val1 val2 ...)) (key2 . (val3 val4 ...)) ...)
-
-Examples:
-  (remove-dual 'subject '(pred . obj) '((subject . ((pred . obj)))))
-  ; => NIL (empty - last value removed)
-
-  (remove-dual 'subject '(pred1 . obj1)
-               '((subject . ((pred1 . obj1) (pred2 . obj2)))))
-  ; => ((subject . ((pred2 . obj2))))
-
-  (remove-dual 'nonexistent 'val '((key . (val1 val2))))
-  ; => ((key . (val1 val2))) (unchanged - key not found)
-
-See also: UPDATE-DUAL, DELETE-TRIPLE"
-  (let* ((entry (assoc key orig))
-         (oldvals (cdr entry)))
-    (if entry
-        ;; Key exists - remove the value
-        (let ((newvals (remove val oldvals :test #'equal)))
-          (if newvals
-              ;; Still have values left - update the entry
-              (progn
-                (setf (cdr entry) newvals)
-                orig)
-              ;; No values left - remove entire key entry
-              (remove entry orig :test #'equal)))
-        ;; Key not found - return original unchanged
-        orig)))
-
-;;; -----------------------------------------------------------------------------
-;;; Triple Operations (Generic Functions)
-;;; -----------------------------------------------------------------------------
-
-(defgeneric add-triple (triple graph)
-  (:documentation "Add a single RDF triple to GRAPH.
-
-This is the core function for adding data to the graph. Behavior depends on
-the graph type:
-  - LOCAL-GRAPH: Updates three hash table indices (SPO, OSP, POS)
-  - HTTP-GRAPH: Sends triple to remote HTTP endpoint
-  - WEBSOCKET-GRAPH: Sends triple over WebSocket connection
-
-Arguments:
-  TRIPLE - A list of three elements: (subject predicate object)
-  GRAPH  - A graph object
-
-Returns:
-  NIL
-
-Examples:
-  (add-triple '(John schema@name \"John Doe\") g)
-  (add-triple '(John a schema@Person) g)
-
-See also: ADD-TRIPLES, DELETE-TRIPLE"))
-
-(defmethod add-triple (triple (graph local-graph))
-  "Add a single RDF triple to a local in-memory graph.
-
-Updates three hash table indices (SPO, OSP, POS) to enable efficient querying
-from different access patterns. The function automatically normalizes rdf@type
-to 'a for storage efficiency. Thread-safe via per-graph mutex.
-
-Side Effects:
-  - Updates graph-spo hash table (subject -> ((predicate . (objects...))))
-  - Updates graph-osp hash table (object -> ((subject . (predicates...))))
-  - Updates graph-pos hash table (predicate -> ((object . (subjects...))))
-
-Normalization:
-  - rdf@type is automatically converted to 'a during storage"
-  (let* ((subject (first triple))
-         ;; Normalize rdf@type to 'a for storage efficiency
-         (predicate (if (eq (second triple) 'rdf@type) 'a (second triple)))
-         ;; Process object for content reference conversion
-         (object (process-triple-object (third triple)))
-         (spo (graph-spo graph))
-         (osp (graph-osp graph))
-         (pos (graph-pos graph)))
-
-    ;; Thread-safe update of all three indices
-    (with-lock-held ((graph-lock graph))
-      ;; Update SPO index: subject -> ((predicate . (objects...)))
-      (let ((po (gethash subject spo)))
-        (if po
-            (setf (gethash subject spo) (update-dual predicate object po))
-            (setf (gethash subject spo) `((,predicate . ,(list object))))))
-
-      ;; Update OSP index: object -> ((subject . (predicates...)))
-      (let ((sp (gethash object osp)))
-        (if sp
-            (setf (gethash object osp) (update-dual subject predicate sp))
-            (setf (gethash object osp) `((,subject . ,(list predicate))))))
-
-      ;; Update POS index: predicate -> ((object . (subjects...)))
-      (let ((os (gethash predicate pos)))
-        (if os
-            (setf (gethash predicate pos) (update-dual object subject os))
-            (setf (gethash predicate pos) `((,object . ,(list subject))))))))
-
-  nil)
-
-(defgeneric delete-triple (triple graph)
-  (:documentation "Remove a single RDF triple from GRAPH.
-
-Behavior depends on graph type:
-  - LOCAL-GRAPH: Removes from hash table indices with cleanup
-  - HTTP-GRAPH: Sends DELETE request to remote endpoint
-  - WEBSOCKET-GRAPH: Sends delete message over WebSocket
-
-Arguments:
-  TRIPLE - A list of three elements: (subject predicate object)
-  GRAPH  - A graph object
-
-Returns:
-  NIL
-
-Examples:
-  (delete-triple '(John schema@name \"John Doe\") g)
-
-See also: DELETE-TRIPLES, ADD-TRIPLE"))
-
-(defmethod delete-triple (triple (graph local-graph))
-  "Remove a single RDF triple from a local in-memory graph.
-
-This is the inverse of ADD-TRIPLE. It removes a triple from all three indices
-(SPO, OSP, POS) and automatically cleans up empty entries using REMHASH when
-no triples remain for a given key. Thread-safe via per-graph mutex.
-
-Side Effects:
-  - Updates graph-spo hash table (removes or updates entry)
-  - Updates graph-osp hash table (removes or updates entry)
-  - Updates graph-pos hash table (removes or updates entry)
-  - Uses REMHASH to completely remove keys when they become empty
-
-Normalization:
-  - rdf@type is automatically converted to 'a for lookup"
-  (let* ((subject (first triple))
-         ;; Normalize rdf@type to 'a to match storage format
-         (predicate (if (eq (second triple) 'rdf@type) 'a (second triple)))
-         (object (third triple))
-         (spo (graph-spo graph))
-         (osp (graph-osp graph))
-         (pos (graph-pos graph)))
-
-    ;; Thread-safe update of all three indices
-    (with-lock-held ((graph-lock graph))
-      ;; Remove from SPO index: subject -> ((predicate . (objects...)))
-      (let ((po (gethash subject spo)))
-        (when po
-          (let ((updated-po (remove-dual predicate object po)))
-            (if updated-po
-                (setf (gethash subject spo) updated-po)
-                ;; No predicates left for this subject - remove entirely
-                (remhash subject spo)))))
-
-      ;; Remove from OSP index: object -> ((subject . (predicates...)))
-      (let ((sp (gethash object osp)))
-        (when sp
-          (let ((updated-sp (remove-dual subject predicate sp)))
-            (if updated-sp
-                (setf (gethash object osp) updated-sp)
-                ;; No subjects left for this object - remove entirely
-                (remhash object osp)))))
-
-      ;; Remove from POS index: predicate -> ((object . (subjects...)))
-      (let ((os (gethash predicate pos)))
-        (when os
-          (let ((updated-os (remove-dual object subject os)))
-            (if updated-os
-                (setf (gethash predicate pos) updated-os)
-                ;; No objects left for this predicate - remove entirely
-                (remhash predicate pos)))))))
-
-  nil)
-
-;;; -----------------------------------------------------------------------------
-;;; Duals Expansion
-;;; -----------------------------------------------------------------------------
-
-(defun expand-duals (duals element &optional (reorder nil))
-  "Expand alist structure into list of triples.
-
-This function converts the internal alist representation used in the triple
-indices into a flat list of triples. The REORDER parameter determines the
-order of elements in each triple.
-
-For large datasets (100+ entries), this function uses parallel processing
-across multiple threads to improve performance.
-
-Arguments:
-  DUALS   - Alist structure: ((key . (val1 val2 ...)) ...)
-  ELEMENT - The element to include in each expanded triple
-  REORDER - Optional keyword to control triple ordering:
-            NIL (default) - SPO order: (element key value)
-            :OSP          - OSP order: (key value element)
-            :POS          - POS order: (value element key)
-
-Returns:
-  List of triples (each triple is a list of 3 elements)
-
-Structure Transformation:
-  Input:  ((key1 . (val1 val2)) (key2 . (val3)))
-  Output: ((element key1 val1) (element key1 val2) (element key2 val3))
-
-Examples:
-  ;; SPO order (default)
-  (expand-duals '((schema@name . (\"John\")) (schema@age . (30))) 'Person1)
-  ; => ((Person1 schema@name \"John\") (Person1 schema@age 30))
-
-  ;; OSP order
-  (expand-duals '((John . (schema@name schema@age))) \"John Doe\" :osp)
-  ; => ((John schema@name \"John Doe\") (John schema@age \"John Doe\"))
-
-  ;; POS order
-  (expand-duals '((schema@Person . (John Jane))) 'a :pos)
-  ; => ((John a schema@Person) (Jane a schema@Person))
-
-See also: TRIPLES, RAW-TRIPLES"
-  ;; Use threading for large datasets (threshold: 100+ entries)
-  (if (< (length duals) 100)
-      ;; Small dataset - sequential processing
-      (loop for (key . values) in duals
-            nconc (loop for value in values
-                        collect (ecase reorder
-                                  ((nil) (list element key value))      ; SPO
-                                  (:osp  (list key value element))      ; OSP
-                                  (:pos  (list value element key)))))   ; POS
-      ;; Large dataset - parallel processing
-      (let* ((num-threads 4)  ; Use 4 threads for parallel processing
-             (chunk-size (ceiling (/ (length duals) num-threads)))
-             (chunks (loop for i from 0 below (length duals) by chunk-size
-                           collect (subseq duals i (min (+ i chunk-size) (length duals)))))
-             (results nil)
-             (threads nil))
-        ;; Spawn threads to process chunks in parallel
-        (dolist (chunk chunks)
-          (let ((c chunk)  ; Capture chunk by value
-                (elem element)
-                (reord reorder))
-            (push (make-thread
-                   (lambda ()
-                     (loop for (key . values) in c
-                           nconc (loop for value in values
-                                       collect (ecase reord
-                                                 ((nil) (list elem key value))
-                                                 (:osp  (list key value elem))
-                                                 (:pos  (list value elem key))))))
-                   :name "expand-duals-worker")
-                  threads)))
-        ;; Join threads and collect results
-        (dolist (thread (reverse threads))
-          (push (join-thread thread) results))
-        ;; Flatten results
-        (apply #'append (reverse results)))))
-
-;;; -----------------------------------------------------------------------------
-;;; Bulk Triple Operations (with hooks)
-;;; -----------------------------------------------------------------------------
-
-(defgeneric add-triples (triplist graph)
-  (:documentation "Add multiple RDF triples to GRAPH at once.
-
-This is a bulk operation that triggers add-hooks after completion. Behavior
-depends on graph type:
-  - LOCAL-GRAPH: Parallel processing for 100+ triples, calls add-hooks
-  - HTTP-GRAPH: Batch POST request to remote endpoint
-  - WEBSOCKET-GRAPH: Batch send over WebSocket
-
-Arguments:
-  TRIPLIST - List of triples, where each triple is (subject predicate object)
-  GRAPH    - A graph object
-
-Returns:
-  NIL
-
-Hook Protocol:
-  Each hook function receives (graph 'add-triples triplist)
-
-Examples:
-  (add-triples '((John schema@name \"John Doe\")
-                 (John schema@age 30))
-               g)
-
-See also: ADD-TRIPLE, DELETE-TRIPLES"))
-
-(defmethod add-triples (triplist (graph local-graph))
-  "Add multiple RDF triples to a local in-memory graph.
-
-Bulk operation that adds multiple triples and then triggers all registered
-add-hooks. Unlike ADD-TRIPLE (which does NOT trigger hooks), ADD-TRIPLES is
-the primary way to add data when hooks need to be notified.
-
-For large datasets (100+ triples), uses parallel processing across multiple
-threads to improve performance. Each ADD-TRIPLE call is thread-safe via the
-graph's mutex.
-
-Side Effects:
-  - Calls ADD-TRIPLE for each triple (in parallel for 100+ triples)
-  - Calls all registered add-hooks with (graph 'add-triples triplist)"
-  ;; Add all triples (with threading for large datasets)
-  (if (< (length triplist) 100)
-      ;; Small dataset - sequential processing
-      (mapc (lambda (triple) (add-triple triple graph)) triplist)
-      ;; Large dataset - parallel processing
-      (let* ((num-threads 4)  ; Use 4 threads for parallel processing
-             (chunk-size (ceiling (/ (length triplist) num-threads)))
-             (chunks (loop for i from 0 below (length triplist) by chunk-size
-                           collect (subseq triplist i (min (+ i chunk-size) (length triplist)))))
-             (threads nil))
-        ;; Spawn threads to add triples in parallel
-        (dolist (chunk chunks)
-          (let ((c chunk)  ; Capture chunk by value
-                (g graph))
-            (push (make-thread
-                   (lambda ()
-                     (mapc (lambda (triple) (add-triple triple g)) c))
-                   :name "add-triples-worker")
-                  threads)))
-        ;; Wait for all additions to complete before calling hooks
-        (mapc #'join-thread threads)))
-
-  ;; Call all add-hooks AFTER all triples are added
-  (mapc (lambda (hook)
-          (funcall hook graph 'add-triples triplist))
-        (graph-add-hooks graph))
-
-  nil)
-
-(defgeneric delete-triples (triplist graph)
-  (:documentation "Delete multiple RDF triples from GRAPH at once.
-
-This is a bulk operation that triggers delete-hooks after completion. Behavior
-depends on graph type:
-  - LOCAL-GRAPH: Parallel processing for 100+ triples, calls delete-hooks
-  - HTTP-GRAPH: Batch DELETE request to remote endpoint
-  - WEBSOCKET-GRAPH: Batch delete over WebSocket
-
-Arguments:
-  TRIPLIST - List of triples, where each triple is (subject predicate object)
-  GRAPH    - A graph object
-
-Returns:
-  NIL
-
-Hook Protocol:
-  Each hook function receives (graph 'delete-triples triplist)
-
-Examples:
-  (delete-triples '((John schema@name \"John Doe\")
-                    (John schema@age 30))
-                  g)
-
-See also: DELETE-TRIPLE, ADD-TRIPLES"))
-
-(defmethod delete-triples (triplist (graph local-graph))
-  "Delete multiple RDF triples from a local in-memory graph.
-
-Bulk operation that deletes multiple triples and then triggers all registered
-delete-hooks. Unlike DELETE-TRIPLE (which does NOT trigger hooks), DELETE-TRIPLES
-is the primary way to remove data when hooks need to be notified.
-
-For large datasets (100+ triples), uses parallel processing across multiple
-threads to improve performance. Each DELETE-TRIPLE call is thread-safe via the
-graph's mutex.
-
-Side Effects:
-  - Calls DELETE-TRIPLE for each triple (in parallel for 100+ triples)
-  - Calls all registered delete-hooks with (graph 'delete-triples triplist)"
-  ;; Delete all triples (with threading for large datasets)
-  (if (< (length triplist) 100)
-      ;; Small dataset - sequential processing
-      (mapc (lambda (triple) (delete-triple triple graph)) triplist)
-      ;; Large dataset - parallel processing
-      (let* ((num-threads 4)  ; Use 4 threads for parallel processing
-             (chunk-size (ceiling (/ (length triplist) num-threads)))
-             (chunks (loop for i from 0 below (length triplist) by chunk-size
-                           collect (subseq triplist i (min (+ i chunk-size) (length triplist)))))
-             (threads nil))
-        ;; Spawn threads to delete triples in parallel
-        (dolist (chunk chunks)
-          (let ((c chunk)  ; Capture chunk by value
-                (g graph))
-            (push (make-thread
-                   (lambda ()
-                     (mapc (lambda (triple) (delete-triple triple g)) c))
-                   :name "delete-triples-worker")
-                  threads)))
-        ;; Wait for all deletions to complete before calling hooks
-        (mapc #'join-thread threads)))
-
-  ;; Call all delete-hooks AFTER all triples are deleted
-  (mapc (lambda (hook)
-          (funcall hook graph 'delete-triples triplist))
-        (graph-delete-hooks graph))
-
-  nil)
-
-;;; ============================================================================
-;;;; Phase 3: Hook System
-;;; ============================================================================
-
-(defgeneric add-hook-to-graph (graph hook-type hook-function)
-  (:documentation "Add HOOK-FUNCTION to GRAPH's hooks of HOOK-TYPE.
-
-Works on all graph types (local and remote) since hooks are stored in the
-abstract GRAPH base class.
-
-Arguments:
-  GRAPH         - A graph object
-  HOOK-TYPE     - Type of hook: :add, :delete, or :query
-  HOOK-FUNCTION - A function taking (graph operation data) as arguments
-
-Returns:
-  NIL
-
-Examples:
-  (add-hook-to-graph g :add
-    (lambda (graph op data)
-      (format t \"Added ~A triples~%\" (length data))))
-
-See also: REMOVE-HOOK-FROM-GRAPH, GET-GRAPH-HOOKS"))
-
-(defmethod add-hook-to-graph ((graph graph) hook-type hook-function)
-  "Add HOOK-FUNCTION to GRAPH's hooks of HOOK-TYPE.
-
-Hooks are callback functions that are triggered when certain operations occur
-on the graph. This function adds a hook to the appropriate hook list, avoiding
-duplicates.
-
-Hook Types:
-  :add    - Called after ADD-TRIPLES operations
-  :delete - Called after DELETE-TRIPLES operations
-  :query  - Called during GRAPH-QUERY operations
-
-Hook Function Signature:
-  (lambda (graph operation data) ...)
-
-Side Effects:
-  Modifies the graph's hook list for the specified type"
-  (let ((hooks (ecase hook-type
-                 (:add (graph-add-hooks graph))
-                 (:delete (graph-delete-hooks graph))
-                 (:query (graph-query-hooks graph)))))
-    ;; Only add if not already present
-    (unless (member hook-function hooks)
-      (ecase hook-type
-        (:add (setf (graph-add-hooks graph)
-                    (cons hook-function (graph-add-hooks graph))))
-        (:delete (setf (graph-delete-hooks graph)
-                       (cons hook-function (graph-delete-hooks graph))))
-        (:query (setf (graph-query-hooks graph)
-                      (cons hook-function (graph-query-hooks graph)))))))
-  nil)
-
-(defgeneric remove-hook-from-graph (graph hook-type hook-function)
-  (:documentation "Remove HOOK-FUNCTION from GRAPH's hooks of HOOK-TYPE.
-
-Works on all graph types. Safe to call even if hook doesn't exist.
-
-Arguments:
-  GRAPH         - A graph object
-  HOOK-TYPE     - Type of hook: :add, :delete, or :query
-  HOOK-FUNCTION - The function to remove
-
-Returns:
-  NIL
-
-See also: ADD-HOOK-TO-GRAPH, GET-GRAPH-HOOKS"))
-
-(defmethod remove-hook-from-graph ((graph graph) hook-type hook-function)
-  "Remove HOOK-FUNCTION from GRAPH's hooks of HOOK-TYPE.
-
-This is the inverse of ADD-HOOK-TO-GRAPH. It removes a specific hook function
-from the graph's hook list. If the hook is not present, this is a no-op (does
-not signal an error).
-
-Side Effects:
-  Modifies the graph's hook list for the specified type"
-  (ecase hook-type
-    (:add (setf (graph-add-hooks graph)
-                (remove hook-function (graph-add-hooks graph))))
-    (:delete (setf (graph-delete-hooks graph)
-                   (remove hook-function (graph-delete-hooks graph))))
-    (:query (setf (graph-query-hooks graph)
-                  (remove hook-function (graph-query-hooks graph)))))
-  nil)
-
-(defgeneric get-graph-hooks (graph hook-type)
-  (:documentation "Get all hooks of HOOK-TYPE from GRAPH.
-
-Works on all graph types.
-
-Arguments:
-  GRAPH     - A graph object
-  HOOK-TYPE - Type of hook: :add, :delete, or :query
-
-Returns:
-  List of hook functions (may be NIL if no hooks registered)
-
-See also: ADD-HOOK-TO-GRAPH, REMOVE-HOOK-FROM-GRAPH"))
-
-(defmethod get-graph-hooks ((graph graph) hook-type)
-  "Get all hooks of HOOK-TYPE from GRAPH.
-
-Returns the list of hook functions registered for the specified hook type.
-The returned list can be empty if no hooks are registered."
-  (ecase hook-type
-    (:add (graph-add-hooks graph))
-    (:delete (graph-delete-hooks graph))
-    (:query (graph-query-hooks graph))))
-
-;;; ============================================================================
-;;;; Phase 4: Triple Retrieval
-;;; ============================================================================
-
-(defun transform-a-results-to-rdf-type (triples)
-  "Transform triples containing predicate 'a' to use 'rdf@type' instead.
-
-This function handles the equivalence between 'a' (stored form) and 'rdf@type'
-(query form) for RDF type declarations."
-  (mapcar (lambda (triple)
-            (if (eq (second triple) 'a)
-                (list (first triple) 'rdf@type (third triple))
-                triple))
-          triples))
-
-(defgeneric triples (pattern graph)
-  (:documentation "Retrieve triples from GRAPH matching PATTERN.
-
-PATTERN is a list of three elements (subject predicate object) where each
-element can be:
-  - A concrete value (symbol, string, number) to match exactly
-  - T (wildcard) to match any value
-  - A variable symbol (starts with $) to match any value
-
-The function selects the most efficient index based on which pattern elements
-are concrete:
-  - Concrete subject: Use SPO index
-  - Concrete predicate: Use POS index
-  - Concrete object: Use OSP index
-  - All wildcards: Scan all triples
-
-Handles rdf@type/a equivalence: queries for rdf@type will match triples stored
-with predicate 'a', and results will show rdf@type.
-
-Returns: List of matching triples as (subject predicate object) lists.
-
-Examples:
-  (triples '(alice@person t t) g)              ; All triples about alice@person
-  (triples '(t foaf@name t) g)                 ; All name triples
-  (triples '(t t \"Alice\") g)                   ; All triples with object \"Alice\"
-  (triples '(t rdf@type foaf@Person) g)        ; All instances of foaf@Person
-  (triples '($subject foaf@name $name) g)      ; Variables work like wildcards"))
-
-(defmethod triples (pattern (graph local-graph))
-  "Retrieve triples from a local in-memory graph matching PATTERN.
-
-Selects the appropriate index based on the pattern to optimize query performance."
-  (let ((s (first pattern))
-        (p (second pattern))
-        (o (third pattern)))
-    (let ((raw-results
-           (cond
-             ;; Subject is concrete - use SPO index
-             ((not (var-or-wildp s))
-              (let ((results (expand-duals (gethash s (graph-spo graph)) s)))
-                (if (eq p 'rdf@type)
-                    (transform-a-results-to-rdf-type results)
-                    results)))
-             ;; Predicate is concrete - use POS index
-             ((not (var-or-wildp p))
-              (if (eq p 'rdf@type)
-                  ;; Query for rdf@type but 'a' is stored, so look up 'a' and transform
-                  (let ((a-results (expand-duals (gethash 'a (graph-pos graph)) 'a 'pos)))
-                    (transform-a-results-to-rdf-type a-results))
-                  ;; Normal predicate lookup
-                  (expand-duals (gethash p (graph-pos graph)) p 'pos)))
-             ;; Object is concrete - use OSP index
-             ((not (var-or-wildp o))
-              (let ((results (expand-duals (gethash o (graph-osp graph)) o 'osp)))
-                (if (eq p 'rdf@type)
-                    (transform-a-results-to-rdf-type results)
-                    results)))
-             ;; Universal pattern - all triples
-             (t
-              (let ((result nil)
-                    (spo-table (graph-spo graph)))
-                ;; Collect all keys and process them
-                (maphash (lambda (key value)
-                           (setf result (append (expand-duals value key) result)))
-                         spo-table)
-                result)))))
-      ;; Resolve content references before returning
-      (resolve-triple-objects raw-results))))
-
-(defgeneric raw-triples (pattern graph)
-  (:documentation "Retrieve triples from GRAPH matching PATTERN without resolving content references.
-
-Like TRIPLES, but returns raw data without resolving content references.
-Used for checkpointing to preserve file references.
-
-See TRIPLES for detailed documentation of pattern matching."))
-
-(defmethod raw-triples (pattern (graph local-graph))
-  "Retrieve triples from local graph without resolving content references.
-
-Used for serialization and checkpointing to preserve file references."
-  (let ((s (first pattern))
-        (p (second pattern))
-        (o (third pattern)))
-    (cond
-      ;; Subject is concrete - use SPO index
-      ((not (var-or-wildp s))
-       (let ((results (expand-duals (gethash s (graph-spo graph)) s)))
-         (if (eq p 'rdf@type)
-             (transform-a-results-to-rdf-type results)
-             results)))
-      ;; Predicate is concrete - use POS index
-      ((not (var-or-wildp p))
-       (if (eq p 'rdf@type)
-           ;; Query for rdf@type but 'a' is stored, so look up 'a' and transform
-           (let ((a-results (expand-duals (gethash 'a (graph-pos graph)) 'a 'pos)))
-             (transform-a-results-to-rdf-type a-results))
-           ;; Normal predicate lookup
-           (expand-duals (gethash p (graph-pos graph)) p 'pos)))
-      ;; Object is concrete - use OSP index
-      ((not (var-or-wildp o))
-       (let ((results (expand-duals (gethash o (graph-osp graph)) o 'osp)))
-         (if (eq p 'rdf@type)
-             (transform-a-results-to-rdf-type results)
-             results)))
-      ;; Universal pattern - all triples
-      (t
-       (let ((result nil)
-             (spo-table (graph-spo graph)))
-         ;; Collect all keys and process them
-         (maphash (lambda (key value)
-                    (setf result (append (expand-duals value key) result)))
-                  spo-table)
-         result)))))
-
-;;; ============================================================================
-;;;; Phase 5: Pattern Matching
-;;; ============================================================================
-
-(defun augmented-eq (pattern input)
-  "Type-aware equality comparison for pattern matching.
-
-Uses the most appropriate equality test based on the type of PATTERN:
-  - Symbols: EQ (fast pointer comparison)
-  - Strings: STRING= (content comparison)
-  - Numbers: EQL (handles floats correctly)
-  - Other types: EQUAL (deep comparison)
-
-Arguments:
-  PATTERN - Value from the pattern (determines comparison type)
-  INPUT   - Value from input data to compare against
-
-Returns:
-  T if values are equal according to type-appropriate test, NIL otherwise
-
-Examples:
-  (augmented-eq 'alice 'alice)     => T (symbol EQ)
-  (augmented-eq \"Alice\" \"Alice\")   => T (string STRING=)
-  (augmented-eq 42 42)             => T (number EQL)
-  (augmented-eq 'alice \"alice\")   => NIL (different types)"
-  (cond
-    ((symbolp pattern) (eq pattern input))
-    ((stringp pattern) (and (stringp input) (string= pattern input)))
-    ((numberp pattern) (and (numberp input) (eql pattern input)))
-    (t (equal pattern input))))
-
-(defun pat-match (pattern input)
-  "Match PATTERN against INPUT, returning variable bindings.
-
-Performs recursive pattern matching on list structures, binding variables
-(symbols starting with $) to their matched values. Returns a flat list of
-bindings where each binding is a cons cell (variable . value).
-
-Special bindings:
-  - ($var . value) - Variable binding
-  - (t . value)    - Wildcard match marker
-  - (nil . nil)    - Match failure marker
-
-Arguments:
-  PATTERN - Pattern to match (may contain variables like $subject)
-  INPUT   - Input data to match against
-
-Returns:
-  List of bindings (cons cells), including success/failure markers
-
-Examples:
-  (pat-match '$subject 'alice)
-  => (($subject . alice))
-
-  (pat-match '($s foaf@name $n) '(alice foaf@name \"Alice\"))
-  => (($s . alice) (t . foaf@name) ($n . \"Alice\"))
-
-  (pat-match 'alice 'bob)
-  => ((nil . nil))  ; Failed match
-
-Implementation note: Uses NCONC for performance (destructive but faster
-than APPEND). Not tail-recursive, but RDF patterns are shallow (max ~10 deep)."
-  (cond
-    ;; Base case: nil pattern
-    ((null pattern) nil)
-
-    ;; Variable: bind to input
-    ((variablep pattern)
-     (list (cons pattern input)))
-
-    ;; Both atoms: check equality
-    ((and (atom pattern) (atom input))
-     (if (augmented-eq pattern input)
-         (list (cons t input))      ; Success marker
-       (list (cons nil nil))))      ; Failure marker
-
-    ;; Lists: recurse on CAR and CDR
-    (t
-     (nconc (pat-match (car pattern) (car input))
-            (pat-match (cdr pattern) (cdr input))))))
-
-(defun ensure-lparallel-kernel ()
-  "Ensure lparallel kernel is initialized for parallel operations.
-
-Creates a kernel with 4 workers if not already initialized. This is called
-lazily by parallel functions (traverse-graph, filter-triples) before using
-pmap or premove-if.
-
-The kernel is stored in lparallel:*kernel* special variable."
-  (unless (and (boundp '*kernel*) *kernel*)
-    (setf *kernel* (make-kernel 4))))
-
-(defun traverse-graph (pattern triples)
-  "Apply PATTERN to TRIPLES, returning variable bindings for each match.
-
-Maps pat-match over all triples, filters out non-matching results, and returns
-a list of binding alists. For large datasets (100+ triples), uses parallel
-processing via lparallel:pmap.
-
-Arguments:
-  PATTERN - Pattern to match (e.g., '($subject foaf@name $name))
-  TRIPLES - List of triples to match against
-
-Returns:
-  List of binding alists, one for each matching triple
-
-Examples:
-  (traverse-graph '($s foaf@name $n)
-                  '((alice foaf@name \"Alice\")
-                    (bob foaf@name \"Bob\")
-                    (alice foaf@age 30)))
-  => ((($s . alice) ($n . \"Alice\"))
-      (($s . bob) ($n . \"Bob\")))
-
-Performance:
-  - Sequential for < 100 triples
-  - Parallel (4 workers) for >= 100 triples
-
-See also: PAT-MATCH, FILTER-TRIPLES"
-  (if (< (length triples) 100)
-      ;; Small dataset - sequential processing
-      (remove-if (lambda (bindings)
-                   (member '(nil . nil) bindings :test #'equal))
-                 (mapcar (lambda (triple)
-                           (remove '(t) (pat-match pattern triple) :test #'equal))
-                         triples))
-      ;; Large dataset - parallel processing
-      (progn
-        (ensure-lparallel-kernel)
-        (remove-if (lambda (bindings)
-                     (member '(nil . nil) bindings :test #'equal))
-                   (pmap 'list
-                         (lambda (triple)
-                           (remove '(t) (pat-match pattern triple) :test #'equal))
-                         triples)))))
-
-(defun filter-triples (pattern triples)
-  "Filter TRIPLES, returning only those that match PATTERN.
-
-Unlike TRAVERSE-GRAPH which returns bindings, this function returns the
-actual triples that match. For large datasets (100+ triples), uses parallel
-processing via lparallel:premove-if.
-
-Arguments:
-  PATTERN - Pattern to match (e.g., '($subject foaf@name $name))
-  TRIPLES - List of triples to filter
-
-Returns:
-  List of matching triples
-
-Examples:
-  (filter-triples '($s foaf@name $n)
-                  '((alice foaf@name \"Alice\")
-                    (bob foaf@name \"Bob\")
-                    (alice foaf@age 30)))
-  => ((alice foaf@name \"Alice\")
-      (bob foaf@name \"Bob\"))
-
-Performance:
-  - Sequential for < 100 triples
-  - Parallel (4 workers) for >= 100 triples
-
-See also: TRAVERSE-GRAPH, PAT-MATCH"
-  (if (< (length triples) 100)
-      ;; Small dataset - sequential processing
-      (remove-if (lambda (triple)
-                   (member '(nil . nil) (pat-match pattern triple) :test #'equal))
-                 triples)
-      ;; Large dataset - parallel processing
-      (progn
-        (ensure-lparallel-kernel)
-        (premove-if (lambda (triple)
-                      (member '(nil . nil) (pat-match pattern triple) :test #'equal))
-                    triples))))
-
-;;;; ============================================================================
-;;;; Phase 6: Query Execution Engine
-;;;; ============================================================================
-
-;;; -----------------------------------------------------------------------------
-;;; Condition System
-;;; -----------------------------------------------------------------------------
-
-(define-condition query-error (error)
-  ((message
-    :initarg :message
-    :reader query-error-message
-    :documentation "Descriptive error message"))
-  (:documentation "Base condition for all query-related errors"))
-
-(define-condition pattern-match-failure (query-error)
-  ((pattern
-    :initarg :pattern
-    :reader pattern-match-failure-pattern
-    :documentation "The pattern that failed to match")
-   (graph
-    :initarg :graph
-    :reader pattern-match-failure-graph
-    :documentation "The graph that was queried"))
-  (:documentation "Signaled when a non-optional pattern matches no triples")
-  (:report (lambda (condition stream)
-             (format stream "Pattern ~A matched no triples in graph"
-                     (pattern-match-failure-pattern condition)))))
-
-(define-condition binding-conflict (query-error)
-  ((new-bindings
-    :initarg :new-bindings
-    :reader binding-conflict-new
-    :documentation "New bindings that conflict")
-   (old-bindings
-    :initarg :old-bindings
-    :reader binding-conflict-old
-    :documentation "Existing bindings"))
-  (:documentation "Signaled when variable bindings conflict")
-  (:report (lambda (condition stream)
-             (format stream "Binding conflict: new ~A incompatible with old ~A"
-                     (binding-conflict-new condition)
-                     (binding-conflict-old condition)))))
-
-;;; -----------------------------------------------------------------------------
-;;; Binding Utilities
-;;; -----------------------------------------------------------------------------
-
-(defun clean-bindings (bindings)
-  "Remove success markers (T . value) from variable bindings.
-
-BINDINGS is a list of binding sets, each containing (var . value) pairs.
-
-Returns a new list with all (T . value) pairs removed.
-
-Examples:
-  (clean-bindings '((($s . alice) (t . alice) ($p . foaf@name))))
-  => ((($s . alice) ($p . foaf@name)))
-
-See also: PAT-MATCH, UPDATE-BINDINGS"
-  (mapcar (lambda (binding-set)
-            (remove-if (lambda (pair) (eq t (car pair)))
-                       binding-set))
-          bindings))
-
-(defun compatible-bindings-p (newbindings oldbindings)
-  "Check if NEWBINDINGS are compatible with OLDBINDINGS.
-
-Two bindings are compatible if:
-  - They bind the same variable to the same value, OR
-  - They bind different variables, OR
-  - The variable is unbound in one of them
-
-Returns T if compatible, NIL if any variable has conflicting values.
-
-Arguments:
-  NEWBINDINGS - List of (var . value) pairs to check
-  OLDBINDINGS - List of existing binding sets (nested structure)
-
-Examples:
-  (compatible-bindings-p '(($s . alice)) '((($s . alice))))  => T
-  (compatible-bindings-p '(($s . alice)) '((($s . bob))))    => NIL
-  (compatible-bindings-p '(($p . foaf@name)) '((($s . alice)))) => T
-
-See also: UPDATE-BINDINGS"
-  (when *debug*
-    (log:debug "Comparing ~A with ~A" newbindings oldbindings))
-  (every #'identity
-         (mapcar (lambda (new-pair)
-                   (let ((oldval (cdr (assoc (car new-pair) (car oldbindings))))
-                         (newval (cdr new-pair)))
-                     (when *debug*
-                       (log:debug "  Variable ~A: old=~A new=~A" (car new-pair) oldval newval))
-                     (or (not oldval) (equal oldval newval))))
-                 newbindings)))
-
-(defun update-bindings (newbindings oldbindings)
-  "Merge NEWBINDINGS with OLDBINDINGS if compatible.
-
-Returns a list of merged binding sets, or NIL if bindings conflict.
-Removes duplicate bindings and success markers.
-
-Arguments:
-  NEWBINDINGS - List of new binding sets to merge
-  OLDBINDINGS - Existing binding sets
-
-Examples:
-  (update-bindings '((($p . foaf@name))) '((($s . alice))))
-  => ((($s . alice) ($p . foaf@name)))
-
-  (update-bindings '((($s . alice))) '((($s . bob))))
-  => NIL  ; Conflict
-
-See also: CLEAN-BINDINGS, COMPATIBLE-BINDINGS-P"
-  (cond
-    ((not newbindings)
-     (clean-bindings oldbindings))
-    (t
-     (mapcan (lambda (new-binding-set)
-               (if (not (compatible-bindings-p new-binding-set oldbindings))
-                   (progn
-                     (when *debug*
-                       (log:warn "Conflicting bindings: ~A and ~A"
-                                 new-binding-set oldbindings))
-                     nil)
-                 (clean-bindings
-                  (list (remove-duplicates
-                         (append new-binding-set (car oldbindings))
-                         :test #'equal)))))
-             newbindings))))
-
-;;; -----------------------------------------------------------------------------
-;;; Pattern Normalization
-;;; -----------------------------------------------------------------------------
-
-(defun normalize-pattern (pattern)
-  "Normalize rdf@type to 'a' in PATTERN for consistent matching.
-
-Only normalizes if the pattern contains NO variables, since the triples()
-function already handles equivalence by transforming results.
-
-Examples:
-  (normalize-pattern '(alice rdf@type schema@Person))
-  => (alice a schema@Person)
-
-  (normalize-pattern '($s rdf@type schema@Person))
-  => ($s rdf@type schema@Person)  ; Not normalized - has variable
-
-See also: TRIPLES"
-  (if (and (listp pattern)
-           (>= (length pattern) 3)
-           (eq (nth 1 pattern) 'rdf@type)
-           (not (var-or-wildp (nth 0 pattern)))
-           (not (var-or-wildp (nth 2 pattern))))
-      (list (nth 0 pattern) 'a (nth 2 pattern))
-    pattern))
-
-;;; -----------------------------------------------------------------------------
-;;; Optional Clause Handling
-;;; -----------------------------------------------------------------------------
-
-(defun optional-clause-p (clause)
-  "Return T if CLAUSE is an OPTIONAL clause, NIL otherwise.
-
-OPTIONAL clauses have the form: (optional PATTERN)
-
-Examples:
-  (optional-clause-p '(optional ($s foaf@name $name)))  => T
-  (optional-clause-p '($s foaf@name $name))             => NIL
-
-See also: UNWRAP-OPTIONAL"
-  (and (listp clause)
-       (eq (car clause) 'optional)))
-
-(defun unwrap-optional (clause)
-  "Extract the pattern from an OPTIONAL CLAUSE.
-
-If CLAUSE is not optional, returns it unchanged.
-
-Examples:
-  (unwrap-optional '(optional ($s foaf@name $name)))
-  => ($s foaf@name $name)
-
-  (unwrap-optional '($s foaf@name $name))
-  => ($s foaf@name $name)
-
-See also: OPTIONAL-CLAUSE-P"
-  (if (optional-clause-p clause)
-      (second clause)
-    clause))
-
-;;; -----------------------------------------------------------------------------
-;;; Binding Result Normalization
-;;; -----------------------------------------------------------------------------
-
-(defun normalize-binding-results (results)
-  "Ensure RESULTS have consistent triple-nested structure.
-
-The query engine maintains a standard structure:
-  (((bindings1)) ((bindings2)))
-
-This function normalizes any variations to match this structure.
-
-Arguments:
-  RESULTS - Query results that may need normalization
-
-Returns:
-  Results in canonical triple-nested form
-
-See also: GRAPH-QUERY"
-  ;; For now, just return results as-is
-  ;; More sophisticated normalization may be added later
-  results)
-
-;;; -----------------------------------------------------------------------------
-;;; Query Execution Helpers
-;;; -----------------------------------------------------------------------------
-
-(defun %process-first-clause (clauses graph pattern is-optional)
-  "Process first query clause with no existing bindings.
-
-This handles the initial pattern match in a query execution.
-
-Arguments:
-  CLAUSES - Full clause list (including current)
-  GRAPH - The RDF graph to query
-  PATTERN - Unwrapped pattern to match
-  IS-OPTIONAL - T if this is an optional clause
-
-Returns:
-  Binding results, wrapped appropriately for recursion
-  :NO-MATCH if pattern doesn't match and isn't optional
-
-Signals:
-  PATTERN-MATCH-FAILURE if pattern doesn't match (unless optional)
-
-See also: %GRAPH-QUERY-INTERNAL"
-  (let ((bindings (traverse-graph pattern (triples pattern graph))))
-    (when *debug*
-      (log:debug "First clause: pattern=~A bindings=~A" pattern bindings))
-    (cond
-      ;; Pattern didn't match - signal error unless optional
-      ((and (null bindings) (not is-optional))
-       (restart-case
-           (error 'pattern-match-failure
-                  :pattern pattern
-                  :graph graph
-                  :message (format nil "Pattern ~A matched no triples" pattern))
-         (use-empty-bindings ()
-           :report "Continue with empty bindings"
-           '())
-         (return-no-match ()
-           :report "Return :no-match keyword"
-           (return-from %process-first-clause :no-match))))
-      ;; More clauses to process
-      ((cdr clauses)
-       (%graph-query-internal (cdr clauses) graph
-                              (update-bindings nil (or bindings '()))))
-      ;; Single clause - wrap result for consistency
-      (t (if bindings (mapcar #'list bindings) '())))))
-
-(defun %process-multiple-branches (clauses bindings graph pattern is-optional)
-  "Process query when multiple binding branches exist.
-
-Each branch represents an independent solution path that needs to be
-followed through the remaining clauses.
-
-Arguments:
-  CLAUSES - Remaining clauses to process
-  BINDINGS - Current binding branches (multiple)
-  GRAPH - The RDF graph to query
-  PATTERN - Current pattern to match (unwrapped)
-  IS-OPTIONAL - T if current clause is optional
-
-Returns:
-  Combined results from all successful branches
-
-See also: %GRAPH-QUERY-INTERNAL"
-  (remove-if
-   #'null
-   (mapcar
-    (lambda (binding-branch)
-      (let* ((substituted-pattern (sublis binding-branch pattern))
-             (newbindings (traverse-graph substituted-pattern
-                                          (triples pattern graph)))
-             (updated-bindings (update-bindings newbindings
-                                                (list binding-branch))))
-        (when *debug*
-          (log:debug "Branch: pattern=~A new=~A updated=~A"
-                     substituted-pattern newbindings updated-bindings))
-        (if (or (not newbindings) (not updated-bindings))
-            (if is-optional
-                ;; Optional clause failed - continue with existing bindings
-                (%graph-query-internal (cdr clauses) graph (list binding-branch))
-              nil)
-          ;; Successful match - recurse with updated bindings
-          (%graph-query-internal (sublis updated-bindings (cdr clauses))
-                                 graph
-                                 updated-bindings))))
-    bindings)))
-
-(defun %process-single-branch (clauses bindings graph pattern is-optional)
-  "Process query when single binding branch exists.
-
-Arguments:
-  CLAUSES - Remaining clauses to process
-  BINDINGS - Current single binding branch
-  GRAPH - The RDF graph to query  
-  PATTERN - Current pattern to match (unwrapped)
-  IS-OPTIONAL - T if current clause is optional
-
-Returns:
-  Updated bindings after processing this clause
-
-See also: %GRAPH-QUERY-INTERNAL"
-  (let* ((substituted-pattern (sublis bindings pattern))
-         (newbindings (traverse-graph substituted-pattern
-                                      (triples pattern graph)))
-         (updated-bindings (update-bindings newbindings bindings)))
-    (when *debug*
-      (log:debug "Single branch: pattern=~A new=~A updated=~A"
-                 substituted-pattern newbindings updated-bindings))
-    (if (or (not newbindings) (not updated-bindings))
-        (if is-optional
-            ;; Optional clause failed - continue with existing bindings
-            (%graph-query-internal (cdr clauses) graph bindings)
-          nil)
-      ;; Successful match - recurse with updated bindings
-      (%graph-query-internal (sublis updated-bindings (cdr clauses))
-                             graph
-                             updated-bindings))))
-
-(defun %graph-query-internal (clauses graph &optional bindings)
-  "Core query execution engine with pattern matching and OPTIONAL support.
-
-This is the internal implementation of graph-query, handling:
-  - Pattern matching against the graph
-  - Variable binding accumulation
-  - OPTIONAL clause semantics (left-join)
-  - Multiple solution branches
-
-Arguments:
-  CLAUSES - List of patterns or (optional PATTERN) clauses
-  GRAPH - The RDF graph to query
-  BINDINGS - Current variable bindings (used in recursion)
-
-Returns:
-  Triple-nested binding structure: (((var . val) ...))
-  Or :NO-MATCH if a required pattern fails
-
-Execution Paths:
-  1. No clauses left → return current bindings (base case)
-  2. No existing bindings → process first clause
-  3. Multiple binding branches → split and process each
-  4. Single binding branch → apply pattern and recurse
-
-Examples:
-  (%graph-query-internal '(($s foaf@name $name)) graph)
-  => (((($s . alice) ($name . \"Alice\")))
-      ((($s . bob) ($name . \"Bob\"))))
-
-See also: GRAPH-QUERY, TRAVERSE-GRAPH, UPDATE-BINDINGS
-
-TODO: Nested OPTIONAL clauses not yet supported (see CL-PORT-PLAN.md)"
-  (let* ((bindings (or bindings '()))
-         (pattern (car clauses))
-         (is-optional (optional-clause-p pattern))
-         (unwrapped-pattern (if is-optional (unwrap-optional pattern) pattern)))
-    (when *debug*
-      (log:debug "Query: clauses=~A bindings-count=~A"
-                 (length clauses) (length bindings)))
-    (cond
-      ;; Base case: no more clauses or malformed pattern
-      ((or (not clauses) (< (length unwrapped-pattern) 3))
-       bindings)
-      ;; First call: no existing bindings
-      ((not bindings)
-       (%process-first-clause clauses graph unwrapped-pattern is-optional))
-      ;; Multiple binding branches: process each independently
-      ((> (length bindings) 1)
-       (%process-multiple-branches clauses bindings graph unwrapped-pattern is-optional))
-      ;; Single binding branch: apply pattern and recurse
-      (t
-       (%process-single-branch clauses bindings graph unwrapped-pattern is-optional)))))
-
-(defun graph-query (clauses graph &optional bindings)
-  "Execute a SPARQL-like query against GRAPH.
-
-Supports pattern matching with variables, multiple clauses,
-and OPTIONAL clause semantics.
-
-Arguments:
-  CLAUSES - List of triple patterns, e.g., '(($s rdf@type foaf@Person) ...)
-  GRAPH - The RDF graph to query
-  BINDINGS - Optional initial variable bindings
-
-Returns:
-  List of binding sets (triple-nested structure), or
-  :NO-MATCH if a required pattern matches no triples
-
-Signals:
-  PATTERN-MATCH-FAILURE if pattern doesn't match (caught by default handler)
-
-Default Behavior:
-  The default handler returns :NO-MATCH on pattern-match-failure.
-  Callers can override by establishing their own handler.
-
-Variable Syntax:
-  Variables start with $ (e.g., $subject, $name)
-
-Examples:
-  ;; Single clause
-  (graph-query '(($s foaf@name $name)) graph)
-  => (((($s . alice) ($name . \"Alice\")))
-      ((($s . bob) ($name . \"Bob\"))))
-
-  ;; Multiple clauses (join)
-  (graph-query '(($s foaf@name $name)
-                 ($s foaf@age $age))
-               graph)
-  => (((($s . alice) ($name . \"Alice\") ($age . 30))))
-
-  ;; OPTIONAL clause (left-join)
-  (graph-query '(($s foaf@name $name)
-                 (optional ($s foaf@age $age)))
-               graph)
-  => Results include entries without age if not present
-
-Hooks:
-  Calls all registered query-hooks before processing
-
-See also: WHERE (alias), ASK, SELECT, CONSTRUCT, FILTER"
-  ;; Call query hooks before processing
-  (let ((query-hooks (graph-query-hooks graph)))
-    (mapc (lambda (hook) (funcall hook graph 'graph-query clauses))
-          query-hooks))
-  ;; Execute with default error handler
-  (handler-bind ((pattern-match-failure
-                   (lambda (condition)
-                     (when *debug*
-                       (log:warn "Pattern match failure: ~A" condition))
-                     ;; Default behavior: return :no-match
-                     (invoke-restart 'return-no-match))))
-    (let ((raw-results (%graph-query-internal clauses graph bindings)))
-      (if (and raw-results (not (eq raw-results :no-match)))
-          (normalize-binding-results raw-results)
-        raw-results))))
-
-;; Alias for compatibility
-(setf (fdefinition 'where) #'graph-query)
-
-;;;; ============================================================================
-;;;; Phase 7: Query Operations (ASK, CONSTRUCT, DELETE-DATA)
-;;;; ============================================================================
-
-;;; -----------------------------------------------------------------------------
-;;; Boolean Queries
-;;; -----------------------------------------------------------------------------
-
-(defun ask (clauses graph)
-  "Execute a boolean ASK query against GRAPH.
-
-Returns T if the pattern matches at least one result, NIL otherwise.
-Handles pattern-match-failure gracefully by returning NIL.
-
-Arguments:
-  CLAUSES - List of triple patterns (same as graph-query)
-  GRAPH - The RDF graph to query
-
-Returns:
-  T if pattern matches, NIL otherwise
-
-Examples:
-  (ask '(($s foaf@name \"Alice\")) graph)  => T or NIL
-  (ask '(($s rdf@type foaf@Person)) graph) => T or NIL
-
-Note: Unlike graph-query, ASK never signals errors. It returns NIL
-for both pattern-match-failure and empty results.
-
-See also: GRAPH-QUERY, SELECT"
-  (handler-case
-      (let ((result (graph-query clauses graph)))
-        ;; Result is :no-match or a binding list
-        (and result
-             (not (eq result :no-match))
-             (>= (length (remove nil result)) 1)))
-    (error () nil)))
-
-;;; -----------------------------------------------------------------------------
-;;; Triple Construction
-;;; -----------------------------------------------------------------------------
-
-(defun expand-list-bindings (triples)
-  "Expand triples containing list values into multiple triples.
-
-If a triple's object is a list, expands it into multiple triples,
-one for each list element.
-
-Arguments:
-  TRIPLES - List of triples (each triple is (subject predicate object))
-
-Returns:
-  List of expanded triples
-
-Examples:
-  (expand-list-bindings '((alice foaf@knows (bob charlie))))
-  => ((alice foaf@knows bob) (alice foaf@knows charlie))
-
-  (expand-list-bindings '((alice foaf@name \"Alice\")))
-  => ((alice foaf@name \"Alice\"))
-
-See also: CONSTRUCT"
-  (mapcan (lambda (triple)
-            (let ((subject (nth 0 triple))
-                  (predicate (nth 1 triple))
-                  (object (nth 2 triple)))
-              ;; Check if object is a list
-              (if (and (listp object) (not (null object)))
-                  ;; Expand list into multiple triples
-                  (mapcar (lambda (obj) (list subject predicate obj)) object)
-                ;; Single triple
-                (list triple))))
-          triples))
-
-(defun construct (clauses bindings)
-  "Construct new triples from CLAUSES template using BINDINGS.
-
-CLAUSES is a template (list of triple patterns with variables).
-BINDINGS is the result from graph-query (triple-nested structure).
-
-For each binding set, substitutes variables in the template and
-expands any list objects into multiple triples.
-
-Arguments:
-  CLAUSES - Template triples with variables (e.g., '(($s rdf@type foaf@Person)))
-  BINDINGS - Query results from graph-query
-
-Returns:
-  List of constructed triples
-
-Examples:
-  (let ((bindings (graph-query '(($s foaf@name $n)) graph)))
-    (construct '(($s rdf@type foaf@Person)) bindings))
-  => ((alice rdf@type foaf@Person) (bob rdf@type foaf@Person))
-
-See also: GRAPH-QUERY, DELETE-DATA, EXPAND-LIST-BINDINGS"
-  (mapcan (lambda (binding-set)
-            (mapcan (lambda (binding-branch)
-                      (expand-list-bindings (sublis binding-branch clauses)))
-                    binding-set))
-          bindings))
-
-;;; -----------------------------------------------------------------------------
-;;; Pattern-Based Deletion
-;;; -----------------------------------------------------------------------------
-
-(defun delete-data (clauses graph)
-  "Delete all triples matching CLAUSES pattern from GRAPH.
-
-Uses graph-query to find matches, construct to build triples to delete,
-then delete-triples to remove them. Handles errors gracefully.
-
-Arguments:
-  CLAUSES - List of triple patterns (may include variables)
-  GRAPH - The RDF graph to modify
-
-Returns:
-  T if deletion succeeded (at least one triple deleted)
-  NIL if no matches found or query failed
-
-Examples:
-  ;; Delete specific triple
-  (delete-data '((alice foaf@age 30)) graph)
-
-  ;; Delete all matching pattern
-  (delete-data '(($s rdf@type foaf@Person)) graph)
-
-  ;; Delete with join
-  (delete-data '(($s foaf@name \"Alice\")
-                 ($s foaf@age $age))
-               graph)
-
-Note: Triggers delete-hooks after deletion.
-
-See also: DELETE-TRIPLE, DELETE-TRIPLES, CONSTRUCT, GRAPH-QUERY"
-  (handler-case
-      (let* ((bindings (graph-query clauses graph))
-             (triples-to-delete (when (and bindings (not (eq bindings :no-match)))
-                                  (construct clauses bindings))))
-        (when triples-to-delete
-          (delete-triples triples-to-delete graph)
-          t))
-    (error () nil)))
-
-;;; -----------------------------------------------------------------------------
-;;; Variable Projection (SELECT)
-;;; -----------------------------------------------------------------------------
-
-(defun binding-val (variable bindings)
-  "Extract value for VARIABLE from BINDINGS alist.
-
-Arguments:
-  VARIABLE - Variable symbol (e.g., $name)
-  BINDINGS - Alist of (var . value) pairs
-
-Returns:
-  Value bound to VARIABLE, or NIL if not found
-
-Examples:
-  (binding-val '$name '(($s . alice) ($name . \"Alice\")))
-  => \"Alice\"
-
-See also: BINDINGS-FROM-ROW, SELECT"
-  (cdr (assoc variable bindings)))
-
-(defun bindings-from-row (variables row)
-  "Extract VALUES for VARIABLES from each binding branch in ROW.
-
-Arguments:
-  VARIABLES - List of variable symbols to extract
-  ROW - Binding set (list of binding branches)
-
-Returns:
-  List of value lists, one per binding branch
-
-Examples:
-  (bindings-from-row '($name $age) 
-                     '((($s . alice) ($name . \"Alice\") ($age . 30))))
-  => ((\"Alice\" 30))
-
-See also: BINDING-VAL, SELECT"
-  (mapcar (lambda (binding-branch)
-            (mapcar (lambda (var) (binding-val var binding-branch))
-                    variables))
-          row))
-
-(defun select (variables where-result)
-  "Project VARIABLES from WHERE-RESULT bindings.
-
-This implements SPARQL SELECT semantics:
-- If WHERE-RESULT is :no-match or NIL, returns list with nil for each variable
-- Otherwise, extracts requested variables from each binding
-
-Arguments:
-  VARIABLES - List of variable symbols to project (e.g., '($name $age))
-  WHERE-RESULT - Result from (where clauses graph) or :no-match
-
-Returns:
-  List of value tuples, one per match
-
-Examples:
-  (let ((result (where '(($s foaf@name $n)) graph)))
-    (select '($n) result))
-  => ((\"Alice\") (\"Bob\"))
-
-  (select '($name) :no-match)
-  => ((nil))  ; Partial match semantics
-
-Usage Pattern:
-  (select '($name $age)
-          (where '(($s foaf@name $name)
-                   ($s foaf@age $age))
-                 graph))
-
-See also: WHERE, GRAPH-QUERY, BINDINGS-FROM-ROW"
-  (if (or (not where-result) (eq where-result :no-match))
-      ;; Return nil for all requested variables when WHERE fails
-      (list (mapcar (lambda (var) (declare (ignore var)) nil) variables))
-    ;; Extract requested variables from results
-    (mapcan (lambda (binding-set)
-              (let ((rows (bindings-from-row variables binding-set)))
-                ;; Flatten if rows is a single-element list of a non-list
-                (if (and (= 1 (length rows))
-                         (consp (first rows))
-                         (symbolp (car (first rows))))
-                    (list (first rows))
-                  rows)))
-            where-result)))
-
-;;; -----------------------------------------------------------------------------
-;;; Filter Operations
-;;; -----------------------------------------------------------------------------
-
-(defun eval-with-bindings (bindings predicate)
-  "Bind variables from BINDINGS and evaluate PREDICATE function.
-
-Creates a LET form that binds each variable to its value, then
-evaluates the predicate in that dynamic scope.
-
-**Security Note**: Uses EVAL. Only use with trusted predicates.
-
-Arguments:
-  BINDINGS - Alist of (var . value) pairs
-  PREDICATE - Lambda function that references bound variables
-
-Returns:
-  Result of evaluating PREDICATE with bindings in scope
-
-Examples:
-  (eval-with-bindings '(($x . 5) ($y . 10))
-                      (lambda () (+ $x $y)))
-  => 15
-
-  (eval-with-bindings '(($age . 30))
-                      (lambda () (> $age 25)))
-  => T
-
-Implementation:
-  Builds and evaluates: (let (($x 5) ($y 10)) (funcall predicate))
-
-See also: FILTER"
-  (let ((binding-forms
-          (mapcar (lambda (pair)
-                    (let ((var (car pair))
-                          (val (cdr pair)))
-                      ;; Quote unbound symbols
-                      (when (and (symbolp val) (not (boundp val)))
-                        (setf val `',val))
-                      `(,var ,val)))
-                  ;; Filter out (t . value) success markers
-                  (remove-if (lambda (pair) (eq (car pair) t)) bindings))))
-    (eval `(let ,binding-forms
-             (funcall ,predicate)))))
-
-(defun filter (predicate bindings)
-  "Filter BINDINGS to only those satisfying PREDICATE.
-
-For each binding set, keeps it if ANY binding branch satisfies the predicate.
-The predicate is evaluated with variables dynamically bound.
-
-**Security Note**: Uses EVAL via eval-with-bindings.
-
-Arguments:
-  PREDICATE - Lambda function that references variables (e.g., (lambda () (> $age 30)))
-  BINDINGS - Result from WHERE query
-
-Returns:
-  Filtered binding list
-
-Examples:
-  (let ((results (where '(($s foaf@age $age)) graph)))
-    (filter (lambda () (> $age 30)) results))
-  => Bindings where age > 30
-
-  (filter (lambda () (and (> $age 25) (string= $name \"Alice\"))) results)
-  => Complex predicate
-
-See also: EVAL-WITH-BINDINGS, FILTER-EXISTS, FILTER-NOT-EXISTS"
-  (remove-if-not
-   (lambda (binding-set)
-     ;; Keep if ANY branch satisfies predicate
-     (some (lambda (binding-branch)
-             (eval-with-bindings binding-branch predicate))
-           binding-set))
-   bindings))
-
-;;; -----------------------------------------------------------------------------
-;;; Pattern-Based Filters (SPARQL EXISTS/NOT EXISTS)
-;;; -----------------------------------------------------------------------------
-
-(defun filter-exists (pattern graph bindings)
-  "Keep bindings where PATTERN matches in GRAPH (SPARQL FILTER EXISTS).
-
-For each binding set, substitutes variables into PATTERN and checks
-if it matches any triples in GRAPH.
-
-Arguments:
-  PATTERN - Triple pattern with variables (e.g., '(($person foaf@email $email)))
-  GRAPH - The RDF graph to check against
-  BINDINGS - Result from WHERE query
-
-Returns:
-  Filtered bindings where pattern exists
-
-Examples:
-  ;; Find people who have email addresses
-  (let ((results (where '(($person foaf@name $name)) graph)))
-    (filter-exists '(($person foaf@email $email)) graph results))
-
-  ;; Find people who know someone specific
-  (filter-exists '(($person foaf@knows bob)) graph results)
-
-See also: FILTER-NOT-EXISTS, ASK, FILTER"
-  (remove-if-not
-   (lambda (binding-set)
-     (some (lambda (binding-branch)
-             (let ((instantiated-pattern (sublis binding-branch pattern)))
-               (ask (list instantiated-pattern) graph)))
-           binding-set))
-   bindings))
-
-(defun filter-not-exists (pattern graph bindings)
-  "Keep bindings where PATTERN does NOT match in GRAPH (SPARQL FILTER NOT EXISTS).
-
-For each binding set, substitutes variables into PATTERN and keeps
-the binding only if the pattern FAILS to match in GRAPH.
-
-Arguments:
-  PATTERN - Triple pattern with variables
-  GRAPH - The RDF graph to check against
-  BINDINGS - Result from WHERE query
-
-Returns:
-  Filtered bindings where pattern does not exist
-
-Examples:
-  ;; Find people WITHOUT email addresses
-  (let ((results (where '(($person foaf@name $name)) graph)))
-    (filter-not-exists '(($person foaf@email $email)) graph results))
-
-  ;; Find people who DON'T know someone
-  (filter-not-exists '(($person foaf@knows charlie)) graph results)
-
-See also: FILTER-EXISTS, ASK, FILTER"
-  (remove-if
-   (lambda (binding-set)
-     (some (lambda (binding-branch)
-             (let ((instantiated-pattern (sublis binding-branch pattern)))
-               (ask (list instantiated-pattern) graph)))
-           binding-set))
-   bindings))
-
-;;;; ============================================================================
-;;;; Phase 8: Content Reference System
-;;;; ============================================================================
-
-;;; Large string objects (> 1000 characters) are stored as files to reduce
-;;; memory usage and enable deduplication via MD5 hashing.
-;;;
-;;; Storage format: "file:content-<md5-hash>.txt"
-;;; Cache location: XDG_CACHE_HOME/cl-rdf/content-<md5-hash>.txt
-
-(defvar *content-reference-threshold* 1000
-  "Maximum string length before converting to content reference.")
-
-(defvar *content-cache-dir* nil
-  "Cache directory for content references. Initialized on first use.")
-
-;;; -----------------------------------------------------------------------------
-;;; Content Reference Predicates
-;;; -----------------------------------------------------------------------------
-
-(defun content-reference-p (value)
-  "Return T if VALUE is a content reference string.
-
-Content references have the format: file:content-<hash>.txt
-
-Examples:
-  (content-reference-p \"file:content-abc123.txt\") => T
-  (content-reference-p \"regular string\") => NIL"
-  (and (stringp value)
-       (>= (length value) 17)  ; Minimum: "file:content-.txt"
-       (alexandria:starts-with-subseq "file:content-" value)
-       (alexandria:ends-with-subseq ".txt" value)))
-
-;;; -----------------------------------------------------------------------------
-;;; Content Storage and Retrieval
-;;; -----------------------------------------------------------------------------
-
-(defun %ensure-content-cache-dir ()
-  "Ensure content cache directory exists and return its path."
-  (unless *content-cache-dir*
-    (let* ((cache-home (or (uiop:getenv "XDG_CACHE_HOME")
-                           (merge-pathnames ".cache/" (user-homedir-pathname))))
-           (cl-rdf-cache (merge-pathnames "cl-rdf/" cache-home)))
-      (ensure-directories-exist cl-rdf-cache)
-      (setf *content-cache-dir* cl-rdf-cache)))
-  *content-cache-dir*)
-
-(defun %compute-content-hash (content)
-  "Compute MD5 hash of CONTENT string for deduplication."
-  (let ((digest (ironclad:digest-sequence
-                 :md5
-                 (ironclad:ascii-string-to-byte-array content))))
-    (ironclad:byte-array-to-hex-string digest)))
-
-(defun store-large-content (content)
-  "Store CONTENT as file reference if it exceeds threshold.
-
-If CONTENT is a string longer than *content-reference-threshold*,
-stores it in a file and returns a reference string. Otherwise returns
-CONTENT unchanged.
-
-Returns:
-  - Original content if below threshold or not a string
-  - Reference string \"file:content-<hash>.txt\" if stored
-
-Examples:
-  (store-large-content \"short\") => \"short\"
-  (store-large-content (make-string 1500 :initial-element #\\x))
-  => \"file:content-abc123...txt\""
-  (if (and (stringp content)
-           (> (length content) *content-reference-threshold*))
-      (let* ((hash (%compute-content-hash content))
-             (filename (format nil "content-~A.txt" hash))
-             (filepath (merge-pathnames filename (%ensure-content-cache-dir))))
-        ;; Write content to file (creates or overwrites)
-        (with-open-file (stream filepath
-                                :direction :output
-                                :if-exists :supersede
-                                :if-does-not-exist :create)
-          (write-string content stream))
-        ;; Return reference
-        (format nil "file:~A" filename))
-    content))
-
-(defun resolve-content-reference (value)
-  "Resolve content reference VALUE to its stored content.
-
-If VALUE is a content reference, reads and returns the file contents.
-Otherwise returns VALUE unchanged.
-
-Arguments:
-  VALUE - String (reference or regular) or any other value
-
-Returns:
-  - File contents if VALUE is a reference and file exists
-  - Original VALUE otherwise
-
-Examples:
-  (resolve-content-reference \"regular\") => \"regular\"
-  (resolve-content-reference \"file:content-abc123.txt\")
-  => <contents of file>"
-  (if (content-reference-p value)
-      (let* ((filename (subseq value 5))  ; Strip "file:" prefix
-             (filepath (merge-pathnames filename (%ensure-content-cache-dir))))
-        (if (probe-file filepath)
-            (uiop:read-file-string filepath)
-          value))  ; Return reference if file missing
-    value))
-
-;;; -----------------------------------------------------------------------------
-;;; Triple Object Processing
-;;; -----------------------------------------------------------------------------
-
-(defun process-triple-object (object)
-  "Process OBJECT for storage, converting large strings to references.
-
-If OBJECT is a string exceeding *content-reference-threshold*,
-converts it to a content reference. Otherwise returns OBJECT unchanged.
-
-This function is called by ADD-TRIPLE before storing.
-
-Arguments:
-  OBJECT - Any value (string, symbol, number, etc.)
-
-Returns:
-  - Content reference if OBJECT is a large string
-  - Original OBJECT otherwise
-
-Examples:
-  (process-triple-object \"short\") => \"short\"
-  (process-triple-object (make-string 1500)) => \"file:content-...txt\""
-  (if (stringp object)
-      (store-large-content object)
-    object))
-
-(defun resolve-triple-object (triple)
-  "Resolve content references in TRIPLE's object position.
-
-Takes a triple (S P O) and resolves O if it's a content reference.
+  (bnode) => _:G0
+  (bnode) => _:G1"
+  (alexandria:symbolicate "_:G" (incf *bnode-counter*)))
+
+;;;; Phase 2: Triple Storage Operations
+
+(defun %ensure-nested-alist (key hash-table)
+  "Helper: Ensure KEY exists in HASH-TABLE with empty alist value."
+  (unless (gethash key hash-table)
+    (setf (gethash key hash-table) nil)))
+
+(defun %add-to-nested-alist (key1 key2 hash-table)
+  "Helper: Add KEY2 to alist stored at KEY1 in HASH-TABLE."
+  (%ensure-nested-alist key1 hash-table)
+  (let ((alist (gethash key1 hash-table)))
+    (let ((entry (assoc key2 alist :test #'eq)))
+      (unless entry
+        (setf (gethash key1 hash-table)
+              (acons key2 nil alist))))))
+
+(defun %add-to-nested-list (key1 key2 value hash-table)
+  "Helper: Add VALUE to list at KEY1->KEY2 in HASH-TABLE."
+  (%add-to-nested-alist key1 key2 hash-table)
+  (let* ((alist (gethash key1 hash-table))
+         (entry (assoc key2 alist :test #'eq))
+         (current-list (cdr entry)))
+    (unless (member value current-list :test #'equal)
+      (setf (cdr entry) (cons value current-list)))))
+
+(defun add-triple (triple graph)
+  "Add a single triple to GRAPH.
 
 Arguments:
   TRIPLE - List of (subject predicate object)
+  GRAPH - local-graph instance
 
-Returns:
-  New triple with resolved object
+Side Effects:
+  Updates all three indices (SPO, OSP, POS)
+  Normalizes 'a' and rdf@type to 'a'
 
 Examples:
-  (resolve-triple-object '(alice foaf@name \"Alice\"))
-  => (alice foaf@name \"Alice\")
+  (add-triple '(alice foaf@name \"Alice\") graph)
+  (add-triple '(bob rdf@type foaf@Person) graph)"
+  (destructuring-bind (s p o) triple
+    ;; Normalize rdf@type and 'a' to 'a'
+    (let ((normalized-p (if (eq p 'rdf@type) 'a p)))
+      ;; Add to SPO index
+      (%add-to-nested-list s normalized-p o (graph-spo graph))
+      ;; Add to OSP index
+      (%add-to-nested-list o s normalized-p (graph-osp graph))
+      ;; Add to POS index
+      (%add-to-nested-list normalized-p o s (graph-pos graph)))))
 
-  (resolve-triple-object '(bob foaf@bio \"file:content-abc.txt\"))
-  => (bob foaf@bio \"<resolved content>\")"
-  (list (first triple)
-        (second triple)
-        (resolve-content-reference (third triple))))
+(defun add-triples (triples graph)
+  "Add multiple triples to GRAPH and trigger add-hooks.
 
-(defun resolve-triple-objects (triples)
-  "Resolve content references in a list of TRIPLES.
+Arguments:
+  TRIPLES - List of triples to add
+  GRAPH - local-graph instance
 
-Processes each triple's object position, resolving content references.
+Side Effects:
+  Adds all triples via add-triple
+  Calls all registered add-hooks
+
+Examples:
+  (add-triples '((alice foaf@name \"Alice\")
+                 (bob foaf@name \"Bob\")) graph)"
+  (dolist (triple triples)
+    (add-triple triple graph))
+  ;; Trigger hooks
+  (dolist (hook (graph-add-hooks graph))
+    (funcall hook graph 'add-triples triples)))
+
+(defun %remove-from-nested-list (key1 key2 value hash-table)
+  "Helper: Remove VALUE from list at KEY1->KEY2 in HASH-TABLE."
+  (let* ((alist (gethash key1 hash-table))
+         (entry (assoc key2 alist :test #'eq)))
+    (when entry
+      (setf (cdr entry) (remove value (cdr entry) :test #'equal))
+      ;; Clean up empty entries
+      (when (null (cdr entry))
+        (setf (gethash key1 hash-table)
+              (remove key2 alist :key #'car :test #'eq))))))
+
+(defun delete-triple (triple graph)
+  "Delete a single triple from GRAPH.
+
+Arguments:
+  TRIPLE - List of (subject predicate object)
+  GRAPH - local-graph instance
+
+Side Effects:
+  Removes from all three indices (SPO, OSP, POS)
+  Normalizes 'a' and rdf@type to 'a'
+
+Examples:
+  (delete-triple '(alice foaf@name \"Alice\") graph)"
+  (destructuring-bind (s p o) triple
+    (let ((normalized-p (if (eq p 'rdf@type) 'a p)))
+      ;; Remove from SPO index
+      (%remove-from-nested-list s normalized-p o (graph-spo graph))
+      ;; Remove from OSP index
+      (%remove-from-nested-list o s normalized-p (graph-osp graph))
+      ;; Remove from POS index
+      (%remove-from-nested-list normalized-p o s (graph-pos graph)))))
+
+(defun delete-triples (triples graph)
+  "Delete multiple triples from GRAPH and trigger delete-hooks.
+
+Arguments:
+  TRIPLES - List of triples to delete
+  GRAPH - local-graph instance
+
+Side Effects:
+  Deletes all triples via delete-triple
+  Calls all registered delete-hooks
+
+Examples:
+  (delete-triples '((alice foaf@name \"Alice\")
+                    (bob foaf@name \"Bob\")) graph)"
+  (dolist (triple triples)
+    (delete-triple triple graph))
+  ;; Trigger hooks
+  (dolist (hook (graph-delete-hooks graph))
+    (funcall hook graph 'delete-triples triples)))
+
+;;;; Phase 3: Hook System
+
+(defun add-hook-to-graph (graph hook-type hook-function)
+  "Add HOOK-FUNCTION to GRAPH's hook list for HOOK-TYPE.
+
+Arguments:
+  GRAPH - local-graph instance
+  HOOK-TYPE - One of 'add-hooks, 'delete-hooks, 'query-hooks
+  HOOK-FUNCTION - Function accepting (graph operation data)
+
+Side Effects:
+  Adds hook-function to appropriate hook list
+
+Examples:
+  (add-hook-to-graph graph 'add-hooks #'my-logger)"
+  (ecase hook-type
+    (add-hooks
+     (pushnew hook-function (graph-add-hooks graph)))
+    (delete-hooks
+     (pushnew hook-function (graph-delete-hooks graph)))
+    (query-hooks
+     (pushnew hook-function (graph-query-hooks graph)))))
+
+(defun remove-hook-from-graph (graph hook-type hook-function)
+  "Remove HOOK-FUNCTION from GRAPH's hook list for HOOK-TYPE.
+
+Arguments:
+  GRAPH - local-graph instance
+  HOOK-TYPE - One of 'add-hooks, 'delete-hooks, 'query-hooks
+  HOOK-FUNCTION - Function to remove
+
+Side Effects:
+  Removes hook-function from appropriate hook list
+
+Examples:
+  (remove-hook-from-graph graph 'add-hooks #'my-logger)"
+  (ecase hook-type
+    (add-hooks
+     (setf (graph-add-hooks graph)
+           (remove hook-function (graph-add-hooks graph))))
+    (delete-hooks
+     (setf (graph-delete-hooks graph)
+           (remove hook-function (graph-delete-hooks graph))))
+    (query-hooks
+     (setf (graph-query-hooks graph)
+           (remove hook-function (graph-query-hooks graph))))))
+
+(defun get-graph-hooks (graph hook-type)
+  "Get list of hook functions for HOOK-TYPE from GRAPH.
+
+Arguments:
+  GRAPH - local-graph instance
+  HOOK-TYPE - One of 'add-hooks, 'delete-hooks, 'query-hooks
+
+Returns:
+  List of hook functions
+
+Examples:
+  (get-graph-hooks graph 'add-hooks) => (#<FUNCTION MY-LOGGER>)"
+  (ecase hook-type
+    (add-hooks (graph-add-hooks graph))
+    (delete-hooks (graph-delete-hooks graph))
+    (query-hooks (graph-query-hooks graph))))
+
+;;;; Phase 4: Triple Retrieval
+
+(defun %expand-dual-entry (key pair index-type)
+  "Helper: Expand a (key . values) pair into triples based on index type."
+  (let ((dual-key (car pair))
+        (values (cdr pair)))
+    (mapcar (lambda (value)
+              (ecase index-type
+                (spo (list key dual-key value))
+                (osp (list dual-key key value))
+                (pos (list value key dual-key))))
+            values)))
+
+(defun expand-duals (alist key &optional (index-type 'spo))
+  "Expand nested alist structure into flat list of triples.
+
+Arguments:
+  ALIST - Nested alist from hash table
+  KEY - Primary key for the index
+  INDEX-TYPE - One of 'spo, 'osp, 'pos (default 'spo)
+
+Returns:
+  List of triples
+
+Examples:
+  (expand-duals '((foaf@name . (\"Alice\" \"Bob\"))) 'alice 'spo)
+  => ((alice foaf@name \"Alice\") (alice foaf@name \"Bob\"))"
+  (alexandria:mappend
+   (lambda (pair) (%expand-dual-entry key pair index-type))
+   alist))
+
+(defun %transform-a-to-rdf-type (triple)
+  "Helper: Transform 'a' predicate to rdf@type in triple."
+  (if (eq (second triple) 'a)
+      (list (first triple) 'rdf@type (third triple))
+      triple))
+
+(defun transform-a-results-to-rdf-type (triples)
+  "Transform triples with 'a' predicate to use rdf@type.
 
 Arguments:
   TRIPLES - List of triples
 
 Returns:
-  List of triples with resolved objects
+  List of triples with 'a' replaced by rdf@type
 
 Examples:
-  (resolve-triple-objects
-    '((alice foaf@name \"Alice\")
-      (bob foaf@bio \"file:content-xyz.txt\")))
-  => ((alice foaf@name \"Alice\")
-      (bob foaf@bio \"<resolved content>\"))"
-  (mapcar #'resolve-triple-object triples))
+  (transform-a-results-to-rdf-type '((alice a foaf@Person)))
+  => ((alice rdf@type foaf@Person))"
+  (mapcar #'%transform-a-to-rdf-type triples))
 
-;;;; ============================================================================
-;;;; Phase 9: Serialization and Format Conversion
-;;;; ============================================================================
+(defun %collect-spo-keys (graph)
+  "Helper: Collect all subject keys from SPO index."
+  (let ((keys nil))
+    (maphash (lambda (k v)
+               (declare (ignore v))
+               (push k keys))
+             (graph-spo graph))
+    keys))
 
-;;; Serialization functions for saving/loading graphs to files.
-;;; Supports auto-detection and conversion from el-rdf format (namespace:resource)
-;;; to cl-rdf format (namespace@resource).
+(defun %query-universal (graph)
+  "Helper: Query for all triples (t t t pattern)."
+  (let ((all-triples nil))
+    (dolist (subject (%collect-spo-keys graph))
+      (let ((subject-triples (expand-duals
+                              (gethash subject (graph-spo graph))
+                              subject
+                              'spo)))
+        (setf all-triples (nconc all-triples subject-triples))))
+    ;; Transform 'a' to rdf@type
+    (transform-a-results-to-rdf-type all-triples)))
 
-;;; -----------------------------------------------------------------------------
-;;; Triple Serialization
-;;; -----------------------------------------------------------------------------
+(defun %query-by-subject (s p graph)
+  "Helper: Query SPO index by subject."
+  (let ((results (expand-duals (gethash s (graph-spo graph)) s 'spo)))
+    (if (eq p 'rdf@type)
+        (transform-a-results-to-rdf-type results)
+        results)))
 
-(defun triples-to-string (triples)
-  "Serialize TRIPLES to a string in Lisp readable format.
+(defun %query-by-predicate (p graph)
+  "Helper: Query POS index by predicate."
+  (let ((normalized-p (if (eq p 'rdf@type) 'a p)))
+    (let ((results (expand-duals (gethash normalized-p (graph-pos graph))
+                                  normalized-p
+                                  'pos)))
+      (if (eq p 'rdf@type)
+          (transform-a-results-to-rdf-type results)
+          results))))
 
-Uses proper symbol escaping to handle special characters like #.
-The output can be read back with READ-FROM-STRING.
+(defun %query-by-object (o p graph)
+  "Helper: Query OSP index by object."
+  (let ((results (expand-duals (gethash o (graph-osp graph)) o 'osp)))
+    (if (eq p 'rdf@type)
+        (transform-a-results-to-rdf-type results)
+        results)))
+
+(defgeneric triples (pattern graph)
+  (:documentation "Retrieve triples matching PATTERN from GRAPH.
 
 Arguments:
-  TRIPLES - List of triples to serialize
+  PATTERN - List of (subject predicate object), use T as wildcard
+  GRAPH - local-graph instance
 
 Returns:
-  String representation of triples
+  List of matching triples with content references resolved
+
+Examples:
+  (triples '(alice t t) graph)
+  (triples '(t foaf@name t) graph)
+  (triples '(t t foaf@Person) graph)"))
+
+(defmethod triples (pattern (graph local-graph))
+  (let ((s (first pattern))
+        (p (second pattern))
+        (o (third pattern)))
+    (cond
+      ((not (var-or-wildp s)) (%query-by-subject s p graph))
+      ((not (var-or-wildp p)) (%query-by-predicate p graph))
+      ((not (var-or-wildp o)) (%query-by-object o p graph))
+      (t (%query-universal graph)))))
+
+(defgeneric raw-triples (pattern graph)
+  (:documentation "Retrieve triples without resolving content references.
+
+Arguments:
+  PATTERN - List of (subject predicate object), use T as wildcard
+  GRAPH - local-graph instance
+
+Returns:
+  List of matching triples with content references preserved
+
+Examples:
+  (raw-triples '(t t t) graph)"))
+
+(defmethod raw-triples (pattern (graph local-graph))
+  ;; For now, identical to triples - content reference resolution
+  ;; will be added in Phase 8
+  (triples pattern graph))
+
+;;;; Phase 5: Pattern Matching
+
+(defun %match-element (pattern-elem triple-elem bindings)
+  "Helper: Match single element, return updated bindings or NIL."
+  (cond
+    ((wildcardp pattern-elem) bindings)
+    ((variablep pattern-elem)
+     (let ((existing (assoc pattern-elem bindings :test #'eq)))
+       (if existing
+           (if (equal (cdr existing) triple-elem)
+               bindings
+               nil)
+           (acons pattern-elem triple-elem bindings))))
+    ((equal pattern-elem triple-elem) bindings)
+    (t nil)))
+
+(defun pat-match (pattern triple &optional bindings)
+  "Match PATTERN against TRIPLE, return bindings or NIL.
+
+Arguments:
+  PATTERN - List of (s p o) with variables ($var) or wildcards (t)
+  TRIPLE - List of (s p o) concrete values
+  BINDINGS - Optional existing bindings alist
+
+Returns:
+  Updated bindings alist if match succeeds, NIL otherwise
+
+Examples:
+  (pat-match '($s foaf@name \"Alice\") '(alice foaf@name \"Alice\"))
+  => (($s . alice))"
+  (let ((result-bindings bindings))
+    (loop for pattern-elem in pattern
+          for triple-elem in triple
+          do (setf result-bindings
+                   (%match-element pattern-elem triple-elem result-bindings))
+          when (null result-bindings)
+            do (return-from pat-match nil))
+    result-bindings))
+
+(defun %merge-bindings (bindings1 bindings2)
+  "Helper: Merge two binding alists, return NIL if conflict."
+  (let ((result bindings1))
+    (dolist (binding bindings2 result)
+      (let ((var (car binding))
+            (val (cdr binding)))
+        (let ((existing (assoc var result :test #'eq)))
+          (cond
+            ((null existing)
+             (setf result (acons var val result)))
+            ((not (equal (cdr existing) val))
+             (return-from %merge-bindings nil))))))))
+
+(defun match-triples-against-pattern (pattern triples &optional bindings)
+  "Match PATTERN against list of TRIPLES with optional BINDINGS.
+
+Arguments:
+  PATTERN - Pattern with variables/wildcards
+  TRIPLES - List of concrete triples
+  BINDINGS - Optional existing bindings
+
+Returns:
+  List of binding alists for successful matches
+
+Examples:
+  (match-triples-against-pattern '($s foaf@name $n)
+                                  '((alice foaf@name \"Alice\")))
+  => ((($n . \"Alice\") ($s . alice)))"
+  (let ((results nil))
+    (dolist (triple triples (nreverse results))
+      (let ((match-result (pat-match pattern triple bindings)))
+        (when match-result
+          (push match-result results))))))
+
+;;;; Phase 6: Query Engine Core
+
+(defun %apply-pattern-to-bindings (pattern binding graph)
+  "Helper: Apply pattern with existing binding, return new bindings."
+  (let ((instantiated-pattern
+         (mapcar (lambda (elem)
+                   (if (variablep elem)
+                       (let ((bound-val (cdr (assoc elem binding :test #'eq))))
+                         (or bound-val elem))
+                       elem))
+                 pattern)))
+    (let ((matching-triples (triples instantiated-pattern graph)))
+      (match-triples-against-pattern pattern matching-triples binding))))
+
+(defun %process-clause (clause binding graph)
+  "Helper: Process single clause with binding, return new bindings."
+  (if (eq (first clause) 'optional)
+      (let ((optional-pattern (second clause)))
+        (let ((results (%apply-pattern-to-bindings optional-pattern
+                                                    binding
+                                                    graph)))
+          (if results
+              results
+              (list binding))))
+      (%apply-pattern-to-bindings clause binding graph)))
+
+(defun %process-clauses-with-bindings (clauses bindings graph)
+  "Helper: Process remaining clauses with current bindings."
+  (if (null clauses)
+      bindings
+      (let ((new-bindings nil))
+        (dolist (binding bindings)
+          (let ((clause-results (%process-clause (first clauses)
+                                                  binding
+                                                  graph)))
+            (setf new-bindings (nconc new-bindings clause-results))))
+        (%process-clauses-with-bindings (rest clauses) new-bindings graph))))
+
+(defgeneric graph-query (clauses graph)
+  (:documentation "Execute query with multiple CLAUSES on GRAPH.
+
+Arguments:
+  CLAUSES - List of patterns, supports (OPTIONAL pattern) syntax
+  GRAPH - local-graph instance
+
+Returns:
+  List of binding alists
+
+Examples:
+  (graph-query '(($s foaf@name $n)) graph)
+  (graph-query '(($s foaf@name $n) (OPTIONAL ($s foaf@age $a))) graph)"))
+
+(defmethod graph-query (clauses (graph local-graph))
+  ;; Trigger query hooks
+  (dolist (hook (graph-query-hooks graph))
+    (funcall hook graph 'graph-query clauses))
+
+  (if (null clauses)
+      nil
+      (let ((first-clause (first clauses)))
+        (let ((initial-bindings
+               (if (eq (first first-clause) 'optional)
+                   (list nil)
+                   (let ((pattern (if (listp first-clause)
+                                      first-clause
+                                      (list first-clause))))
+                     (match-triples-against-pattern pattern
+                                                    (triples pattern graph))))))
+          (%process-clauses-with-bindings (rest clauses)
+                                          initial-bindings
+                                          graph)))))
+
+;;;; Phase 7: Query Operations
+
+(defun select (vars bindings)
+  "Project variables VARS from BINDINGS.
+
+Arguments:
+  VARS - List of variable symbols to project
+  BINDINGS - List of binding alists from query
+
+Returns:
+  List of projected binding alists
+
+Examples:
+  (select '($name) bindings) => ((($name . \"Alice\")) (($name . \"Bob\")))"
+  (mapcar (lambda (binding)
+            (mapcar (lambda (var)
+                      (assoc var binding :test #'eq))
+                    vars))
+          bindings))
+
+(defun ask (bindings)
+  "Boolean query - check if BINDINGS is non-empty.
+
+Arguments:
+  BINDINGS - List of binding alists from query
+
+Returns:
+  T if bindings exist, NIL otherwise
+
+Examples:
+  (ask bindings) => T"
+  (not (null bindings)))
+
+(defun %instantiate-pattern (pattern bindings)
+  "Helper: Replace variables in pattern with values from bindings."
+  (mapcar (lambda (elem)
+            (if (variablep elem)
+                (let ((binding (assoc elem bindings :test #'eq)))
+                  (if binding
+                      (cdr binding)
+                      elem))
+                elem))
+          pattern))
+
+(defun construct (template bindings)
+  "Construct new triples from TEMPLATE using BINDINGS.
+
+Arguments:
+  TEMPLATE - Triple pattern with variables
+  BINDINGS - List of binding alists from query
+
+Returns:
+  List of constructed triples
+
+Examples:
+  (construct '($s rdf@type foaf@Person) bindings)
+  => ((alice rdf@type foaf@Person) (bob rdf@type foaf@Person))"
+  (mapcar (lambda (binding)
+            (%instantiate-pattern template binding))
+          bindings))
+
+(defun filter (predicate bindings)
+  "Filter BINDINGS using PREDICATE function.
+
+Arguments:
+  PREDICATE - Function accepting binding alist, returns T to keep
+  BINDINGS - List of binding alists from query
+
+Returns:
+  Filtered list of binding alists
+
+Examples:
+  (filter (lambda (b) (> (cdr (assoc '$age b)) 18)) bindings)"
+  (remove-if-not predicate bindings))
+
+(defun delete-data (pattern graph)
+  "Delete all triples matching PATTERN from GRAPH.
+
+Arguments:
+  PATTERN - Triple pattern (may contain variables/wildcards)
+  GRAPH - local-graph instance
+
+Side Effects:
+  Deletes matching triples from graph
+  Triggers delete-hooks
+
+Returns:
+  Number of triples deleted
+
+Examples:
+  (delete-data '($s foaf@name \"Alice\") graph) => 1"
+  (let ((matching-triples (triples pattern graph)))
+    (delete-triples matching-triples graph)
+    (length matching-triples)))
+
+;;;; Phase 8: Content Reference System
+
+(defvar *content-reference-threshold* 1000
+  "Maximum string length before converting to content reference.")
+
+(defun %ensure-content-cache-dir ()
+  "Helper: Ensure content cache directory exists and return path."
+  (let ((cache-dir (merge-pathnames "cl-rdf/content/"
+                                     (uiop:xdg-cache-home))))
+    (ensure-directories-exist cache-dir)
+    cache-dir))
+
+(defun %compute-content-hash (content)
+  "Helper: Compute MD5 hash of CONTENT string."
+  (let ((digest (ironclad:make-digest :md5)))
+    (ironclad:update-digest digest
+                            (ironclad:ascii-string-to-byte-array content))
+    (ironclad:byte-array-to-hex-string
+     (ironclad:produce-digest digest))))
+
+(defun content-reference-p (value)
+  "Return T if VALUE is a content reference string.
+
+Arguments:
+  VALUE - Value to test
+
+Returns:
+  T if value is content reference, NIL otherwise
+
+Examples:
+  (content-reference-p \"file:content-abc123.txt\") => T
+  (content-reference-p \"regular string\") => NIL"
+  (and (stringp value)
+       (>= (length value) 17)
+       (alexandria:starts-with-subseq "file:content-" value)
+       (alexandria:ends-with-subseq ".txt" value)))
+
+(defun store-large-content (content)
+  "Store CONTENT as file reference if it exceeds threshold.
+
+Arguments:
+  CONTENT - String content to potentially store
+
+Returns:
+  Content reference string or original content
+
+Side Effects:
+  May create file in cache directory
+
+Examples:
+  (store-large-content \"short\") => \"short\"
+  (store-large-content <long-string>) => \"file:content-<hash>.txt\""
+  (if (and (stringp content)
+           (> (length content) *content-reference-threshold*))
+      (let* ((hash (%compute-content-hash content))
+             (filename (format nil "content-~A.txt" hash))
+             (filepath (merge-pathnames filename (%ensure-content-cache-dir))))
+        (with-open-file (stream filepath :direction :output
+                                :if-exists :supersede
+                                :if-does-not-exist :create)
+          (write-string content stream))
+        (format nil "file:~A" filename))
+      content))
+
+(defun resolve-content-reference (reference)
+  "Resolve content REFERENCE to actual content.
+
+Arguments:
+  REFERENCE - Content reference string
+
+Returns:
+  Actual content from file
+
+Examples:
+  (resolve-content-reference \"file:content-abc123.txt\") => <content>"
+  (if (content-reference-p reference)
+      (let* ((filename (subseq reference 5))
+             (filepath (merge-pathnames filename (%ensure-content-cache-dir))))
+        (if (probe-file filepath)
+            (uiop:read-file-string filepath)
+            reference))
+      reference))
+
+(defun %resolve-triple-content (triple)
+  "Helper: Resolve content references in a single triple."
+  (list (first triple)
+        (second triple)
+        (if (content-reference-p (third triple))
+            (resolve-content-reference (third triple))
+            (third triple))))
+
+(defun resolve-all-content-references (triples)
+  "Resolve all content references in TRIPLES.
+
+Arguments:
+  TRIPLES - List of triples
+
+Returns:
+  List of triples with content references resolved
+
+Examples:
+  (resolve-all-content-references triples)"
+  (mapcar #'%resolve-triple-content triples))
+
+;;;; Phase 9: Serialization and Format Conversion
+
+(defun triples-to-string (triples)
+  "Serialize TRIPLES to string representation.
+
+Arguments:
+  TRIPLES - List of triples
+
+Returns:
+  String representation suitable for read-from-string
 
 Examples:
   (triples-to-string '((alice foaf@name \"Alice\")))
-  => \"((ALICE FOAF@NAME \\\"Alice\\\"))\"
+  => \"((alice foaf@name \\\"Alice\\\"))\""
+  (with-output-to-string (out)
+    (write triples :stream out :case :downcase :readably t)))
 
-  (triples-to-string '((|resource#1| foaf@name \"Test\")))
-  => \"((|resource#1| FOAF@NAME \\\"Test\\\"))\""
-  (write-to-string triples :case :downcase :readably t))
-
-;;; -----------------------------------------------------------------------------
-;;; Format Conversion (el-rdf ↔ cl-rdf)
-;;; -----------------------------------------------------------------------------
-
-(defun el-rdf-symbol-p (value)
-  "Return T if VALUE is an el-rdf format symbol (namespace:resource).
-
-El-rdf format uses colon separator (e.g., foaf:name, rdf:type).
-Cl-rdf format uses at-sign separator (e.g., foaf@name, rdf@type).
-
-Does NOT match:
-- Variables (symbols starting with $)
-- Keywords (symbols starting with :)
-- Symbols already in cl-rdf format (containing @)
-- Non-symbols
+(defun el-rdf-symbol-p (symbol)
+  "Return T if SYMBOL uses el-rdf format (contains colon).
 
 Arguments:
-  VALUE - Any value to check
+  SYMBOL - Symbol to test
 
 Returns:
-  T if VALUE is el-rdf format symbol, NIL otherwise
+  T if symbol has colon separator, NIL otherwise
 
 Examples:
-  (el-rdf-symbol-p 'foaf:name) => T
-  (el-rdf-symbol-p 'foaf@name) => NIL
-  (el-rdf-symbol-p '$name) => NIL"
-  (and (symbolp value)
-       (not (keywordp value))
-       (let ((name (symbol-name value)))
-         (and (> (length name) 0)
-              (not (char= (char name 0) #\$))
-              (find #\: name)
-              (not (find #\@ name))))))
+  (el-rdf-symbol-p '|foaf:name|) => T
+  (el-rdf-symbol-p 'foaf@name) => NIL"
+  (and (symbolp symbol)
+       (find #\: (symbol-name symbol) :test #'char=)))
 
-(defun convert-symbol-el-to-cl (value)
-  "Convert el-rdf format symbol to cl-rdf format.
-
-Replaces colon (:) with at-sign (@) in symbol names.
-Preserves non-symbols, variables, keywords, and symbols
-already in cl-rdf format.
+(defun convert-symbol-el-to-cl (symbol)
+  "Convert el-rdf symbol to cl-rdf format (: to @).
 
 Arguments:
-  VALUE - Symbol or other value to convert
+  SYMBOL - Symbol with : separator
 
 Returns:
-  - New symbol with @ if VALUE is el-rdf format
-  - Original VALUE otherwise
+  Symbol with @ separator
 
 Examples:
-  (convert-symbol-el-to-cl 'foaf:name) => foaf@name
-  (convert-symbol-el-to-cl 'foaf@name) => foaf@name
-  (convert-symbol-el-to-cl '$name) => $name
-  (convert-symbol-el-to-cl \"string\") => \"string\""
-  (if (el-rdf-symbol-p value)
-      (let* ((name (symbol-name value))
-             (new-name (substitute #\@ #\: name)))
-        (intern new-name))
-    value))
+  (convert-symbol-el-to-cl '|foaf:name|) => foaf@name
+  (convert-symbol-el-to-cl '|rdf:type|) => rdf@type"
+  (if (el-rdf-symbol-p symbol)
+      (let ((name (symbol-name symbol)))
+        (intern (substitute #\@ #\: name) (symbol-package symbol)))
+      symbol))
+
+(defun %convert-triple-element (elem)
+  "Helper: Convert a single triple element from el-rdf to cl-rdf."
+  (cond
+    ((el-rdf-symbol-p elem) (convert-symbol-el-to-cl elem))
+    ((listp elem) (mapcar #'%convert-triple-element elem))
+    (t elem)))
 
 (defun convert-triple-el-to-cl (triple)
-  "Convert entire triple from el-rdf to cl-rdf format.
-
-Applies convert-symbol-el-to-cl to all three elements.
+  "Convert triple from el-rdf format to cl-rdf format.
 
 Arguments:
-  TRIPLE - Triple in (S P O) format
+  TRIPLE - Triple using el-rdf symbol format
 
 Returns:
-  Triple with symbols converted to cl-rdf format
+  Triple using cl-rdf symbol format
 
 Examples:
-  (convert-triple-el-to-cl '(alice foaf:name \"Alice\"))
-  => (alice foaf@name \"Alice\")
-
-  (convert-triple-el-to-cl '(alice rdf:type foaf:Person))
-  => (alice rdf@type foaf@Person)"
-  (list (convert-symbol-el-to-cl (first triple))
-        (convert-symbol-el-to-cl (second triple))
-        (convert-symbol-el-to-cl (third triple))))
-
-;;; -----------------------------------------------------------------------------
-;;; Graph Persistence
-;;; -----------------------------------------------------------------------------
-
-(defun save-graph (graph filename)
-  "Save GRAPH to FILENAME in cl-rdf format.
-
-Uses raw-triples to preserve content references.
-Always saves in cl-rdf format (namespace@resource).
-
-Arguments:
-  GRAPH - The graph to save
-  FILENAME - Path to output file
-
-Side Effects:
-  Writes file to disk (overwrites if exists)
-
-Examples:
-  (save-graph my-graph \"/tmp/data.rdf\")"
-  (let* ((triples (raw-triples '(t t t) graph))
-         (serialized (triples-to-string triples)))
-    (with-open-file (out filename
-                         :direction :output
-                         :if-exists :supersede
-                         :if-does-not-exist :create)
-      (write-string serialized out))))
+  (convert-triple-el-to-cl '(|alice| |foaf:name| \"Alice\"))
+  => (|alice| foaf@name \"Alice\")"
+  (mapcar #'%convert-triple-element triple))
 
 (defun %convert-el-to-cl-in-string (content)
   "Convert el-rdf format to cl-rdf in string, preserving strings and keywords.
 
 Replaces : with @ outside of quoted strings to convert
 namespace:resource to namespace@resource format.
-Preserves keywords (symbols starting with :)."
+Preserves keywords (symbols starting with :).
+
+Arguments:
+  CONTENT - String with el-rdf format symbols
+
+Returns:
+  String with cl-rdf format symbols"
   (with-output-to-string (out)
     (loop with in-string = nil
           with escape-next = nil
@@ -2290,9 +891,7 @@ Preserves keywords (symbols starting with :)."
                 (write-char ch out)
                 (setf in-string (not in-string)
                       prev-char ch))
-               ;; Replace : with @ only if:
-               ;; - not in string
-               ;; - previous char is alphanumeric (not at start of symbol, so not a keyword)
+               ;; Replace : with @ only if preceded by alphanumeric
                ((and (char= ch #\:)
                      (not in-string)
                      prev-char
@@ -2304,68 +903,69 @@ Preserves keywords (symbols starting with :)."
                 (write-char ch out)
                 (setf prev-char ch))))))
 
+(defun save-graph (graph filename)
+  "Save GRAPH triples to FILENAME in cl-rdf format.
+
+Arguments:
+  GRAPH - local-graph instance
+  FILENAME - Path to save file
+
+Side Effects:
+  Writes file to filesystem
+
+Examples:
+  (save-graph graph \"/tmp/my-graph.rdf\")"
+  (let* ((triples (raw-triples '(t t t) graph))
+         (serialized (triples-to-string triples)))
+    (with-open-file (out filename :direction :output
+                         :if-exists :supersede
+                         :if-does-not-exist :create)
+      (write-string serialized out))))
+
 (defun load-graph (graph filename)
   "Load triples from FILENAME into GRAPH with auto-format detection.
 
-Reads serialized triples and auto-detects format:
-- If el-rdf format (namespace:resource) detected, converts to cl-rdf
-- If cl-rdf format (namespace@resource), loads directly
-
-Pre-processes el-rdf format by replacing : with @ before reading,
-since CL reader interprets foo:bar as package:symbol.
-
 Arguments:
-  GRAPH - The graph to load into
-  FILENAME - Path to input file
+  GRAPH - local-graph instance
+  FILENAME - Path to load file
 
 Side Effects:
-  Adds triples to GRAPH
+  Adds triples to graph
+  Auto-converts el-rdf format to cl-rdf format
 
 Examples:
-  (load-graph my-graph \"/tmp/data.rdf\")"
+  (load-graph graph \"/tmp/my-graph.rdf\")"
   (let* ((content (uiop:read-file-string filename))
          (processed (%convert-el-to-cl-in-string content))
          (triples (read-from-string processed)))
     (add-triples triples graph)))
 
-;;;; ============================================================================
 ;;;; Phase 10: Checkpointing System
-;;;; ============================================================================
-
-;;; Automatic checkpoint system for named graphs.
-;;; Checkpoints are saved to XDG_CACHE_HOME/cl-rdf/checkpoints/
 
 (defvar *graph-checkpoints* (make-hash-table :test 'eq)
-  "Hash table mapping graphs to their checkpoint information.
-Each entry maps graph to (name . last-checkpoint-time).")
-
-;;; -----------------------------------------------------------------------------
-;;; Checkpoint Utilities
-;;; -----------------------------------------------------------------------------
+  "Hash table mapping graphs to their checkpoint information.")
 
 (defun get-checkpoint-dir ()
-  "Get the checkpoint directory for cl-rdf, creating it if necessary.
+  "Get the checkpoint directory path, creating it if needed.
 
 Returns:
   Pathname of checkpoint directory
 
 Examples:
-  (get-checkpoint-dir)
-  => #P\"/home/user/.cache/cl-rdf/checkpoints/\""
-  (let* ((cache-home (or (uiop:getenv "XDG_CACHE_HOME")
-                         (merge-pathnames ".cache/" (user-homedir-pathname))))
-         (checkpoint-dir (merge-pathnames "cl-rdf/checkpoints/" cache-home)))
+  (get-checkpoint-dir) => #P\"/home/user/.cache/cl-rdf/checkpoints/\""
+  (let ((checkpoint-dir (merge-pathnames "cl-rdf/checkpoints/"
+                                         (uiop:xdg-cache-home))))
     (ensure-directories-exist checkpoint-dir)
     checkpoint-dir))
 
 (defun checkpoint-file-path (graph-name)
-  "Generate checkpoint file path for GRAPH-NAME.
+  "Get checkpoint file path for GRAPH-NAME.
 
 Arguments:
-  GRAPH-NAME - String name of the graph
+  GRAPH-NAME - String name of graph
 
 Returns:
-  Pathname for checkpoint file
+  Pathname of checkpoint file
 
 Examples:
   (checkpoint-file-path \"my-graph\")
@@ -2373,26 +973,19 @@ Examples:
   (merge-pathnames (format nil "~A.checkpoint" graph-name)
                    (get-checkpoint-dir)))
 
-;;; -----------------------------------------------------------------------------
-;;; Checkpoint Operations
-;;; -----------------------------------------------------------------------------
-
 (defun register-graph-for-checkpointing (graph graph-name)
   "Register GRAPH for automatic checkpointing with GRAPH-NAME.
 
-The graph will be checkpointed automatically when add-hooks
-or delete-hooks are triggered.
-
 Arguments:
-  GRAPH - The graph to register
+  GRAPH - local-graph instance
   GRAPH-NAME - String name for checkpoint files
 
 Side Effects:
-  - Adds graph to *graph-checkpoints* hash table
-  - Adds checkpoint-hook to graph's add-hooks and delete-hooks
+  Registers graph in *graph-checkpoints*
+  Adds checkpoint-hook to add-hooks and delete-hooks
 
 Examples:
-  (register-graph-for-checkpointing my-graph \"my-data\")"
+  (register-graph-for-checkpointing graph \"my-graph\")"
   (setf (gethash graph *graph-checkpoints*)
         (cons graph-name (get-universal-time)))
   (add-hook-to-graph graph 'add-hooks #'checkpoint-hook)
@@ -2401,15 +994,16 @@ Examples:
 (defun checkpoint-hook (graph operation data)
   "Hook function that checkpoints registered graphs.
 
-Called automatically by hooks after add-triples or delete-triples.
-
 Arguments:
-  GRAPH - The graph being modified
-  OPERATION - Operation type ('add-triples or 'delete-triples)
-  DATA - List of triples being added/deleted
+  GRAPH - local-graph instance
+  OPERATION - Symbol indicating operation type
+  DATA - Operation data (triples)
 
 Side Effects:
-  Saves graph to checkpoint file and updates metadata"
+  Saves checkpoint if graph is registered
+
+Examples:
+  Called automatically via hooks"
   (let ((checkpoint-info (gethash graph *graph-checkpoints*)))
     (when checkpoint-info
       (let* ((graph-name (car checkpoint-info))
@@ -2420,59 +1014,46 @@ Side Effects:
               (cons graph-name (get-universal-time)))))))
 
 (defun save-named-graph (graph)
-  "Save a named graph to its checkpoint file immediately.
-
-The graph must have a name (created with :name keyword).
+  "Save checkpoint for registered GRAPH using its name.
 
 Arguments:
-  GRAPH - Named graph to save
+  GRAPH - local-graph instance
 
 Side Effects:
-  Writes checkpoint file and metadata
+  Saves checkpoint file
 
 Examples:
-  (save-named-graph my-graph)"
-  (let ((graph-name (graph-name graph)))
-    (unless graph-name
-      (error "Graph has no name - cannot save by name"))
-    (save-graph graph (checkpoint-file-path graph-name))
-    (save-checkpoint-metadata graph-name 'manual-save nil)))
+  (save-named-graph graph)"
+  (let ((checkpoint-info (gethash graph *graph-checkpoints*)))
+    (when checkpoint-info
+      (let* ((graph-name (car checkpoint-info))
+             (checkpoint-file (checkpoint-file-path graph-name)))
+        (save-graph graph checkpoint-file)))))
 
 (defun restore-named-graph (graph-name)
-  "Restore a graph from its checkpoint file.
-
-Creates a new graph with GRAPH-NAME, loads data from checkpoint,
-and registers it for continued checkpointing.
+  "Restore graph from checkpoint file for GRAPH-NAME.
 
 Arguments:
-  GRAPH-NAME - String name of checkpoint to restore
+  GRAPH-NAME - String name of checkpoint
 
 Returns:
-  Restored graph
+  New local-graph instance with restored data
 
 Examples:
-  (restore-named-graph \"my-data\")"
+  (restore-named-graph \"my-graph\") => #<LOCAL-GRAPH my-graph>"
   (let ((checkpoint-file (checkpoint-file-path graph-name)))
-    (unless (probe-file checkpoint-file)
-      (error "No checkpoint file found for ~A" graph-name))
-    (let ((restored-graph (make-graph :name graph-name)))
-      (load-graph restored-graph checkpoint-file)
-      (register-graph-for-checkpointing restored-graph graph-name)
-      restored-graph)))
-
-;;; -----------------------------------------------------------------------------
-;;; Checkpoint Metadata
-;;; -----------------------------------------------------------------------------
+    (when (probe-file checkpoint-file)
+      (let ((graph (make-graph graph-name)))
+        (load-graph graph checkpoint-file)
+        graph))))
 
 (defun save-checkpoint-metadata (graph-name operation data)
-  "Save checkpoint metadata for GRAPH-NAME.
-
-Metadata includes operation type, data size, and timestamp.
+  "Save metadata about checkpoint operation.
 
 Arguments:
   GRAPH-NAME - String name of graph
-  OPERATION - Symbol representing operation type
-  DATA - List of triples (for size calculation)
+  OPERATION - Symbol indicating operation type
+  DATA - Operation data
 
 Side Effects:
   Writes metadata file
@@ -2481,15 +1062,14 @@ Examples:
   (save-checkpoint-metadata \"my-graph\" 'add-triples triples)"
   (let ((metadata-file (merge-pathnames
                         (format nil "~A.metadata" graph-name)
-                        (get-checkpoint-dir)))
-        (metadata (list :last-operation operation
-                        :data-size (length data)
-                        :timestamp (get-universal-time))))
-    (with-open-file (out metadata-file
-                         :direction :output
+                        (get-checkpoint-dir))))
+    (with-open-file (out metadata-file :direction :output
                          :if-exists :supersede
                          :if-does-not-exist :create)
-      (write metadata :stream out))))
+      (write (list :last-operation operation
+                   :data-size (length data)
+                   :timestamp (get-universal-time))
+             :stream out :case :downcase :readably t))))
 
 (defun load-checkpoint-metadata (graph-name)
   "Load checkpoint metadata for GRAPH-NAME.
@@ -2551,3 +1131,444 @@ Examples:
                (when (string= (car info) graph-name)
                  (remhash graph *graph-checkpoints*)))
              *graph-checkpoints*)))
+
+;;;; Phase 11: TTL Import
+
+(defun register-prefix (graph prefix namespace-uri)
+  "Register PREFIX to expand to NAMESPACE-URI in GRAPH.
+
+Arguments:
+  GRAPH - local-graph instance
+  PREFIX - String prefix (e.g., \"foaf\", \"schema\")
+  NAMESPACE-URI - Full namespace URI
+
+Side Effects:
+  Adds prefix mapping to graph
+
+Examples:
+  (register-prefix graph \"foaf\" \"http://xmlns.com/foaf/0.1/\")"
+  (setf (graph-prefixes graph)
+        (acons prefix namespace-uri (graph-prefixes graph))))
+
+(defun expand-prefixed-iri (graph prefixed-iri)
+  "Expand prefixed IRI to full IRI using GRAPH prefixes.
+
+Arguments:
+  GRAPH - local-graph instance
+  PREFIXED-IRI - String like \"schema:Person\" or \"foaf:name\"
+
+Returns:
+  Full IRI string or original if no prefix match
+
+Examples:
+  (expand-prefixed-iri graph \"foaf:name\")
+  => \"http://xmlns.com/foaf/0.1/name\""
+  (if (and (stringp prefixed-iri)
+           (find #\: prefixed-iri :test #'char=))
+      (let* ((colon-pos (position #\: prefixed-iri))
+             (prefix (subseq prefixed-iri 0 colon-pos))
+             (local-part (subseq prefixed-iri (1+ colon-pos)))
+             (namespace-uri (cdr (assoc prefix (graph-prefixes graph)
+                                        :test #'string=))))
+        (if namespace-uri
+            (concatenate 'string namespace-uri local-part)
+            prefixed-iri))
+      prefixed-iri))
+
+(defun %compress-iri-with-prefix (iri prefixes)
+  "Helper: Try to compress IRI using registered prefixes."
+  (dolist (prefix-entry prefixes iri)
+    (let ((prefix (car prefix-entry))
+          (namespace-uri (cdr prefix-entry)))
+      (when (alexandria:starts-with-subseq namespace-uri iri :test #'char=)
+        (return (format nil "~A@~A"
+                        prefix
+                        (subseq iri (length namespace-uri))))))))
+
+(defun intern-rdf-resource (graph resource-string &optional namespace)
+  "Convert RDF resource string to symbol with @ separator.
+
+Arguments:
+  GRAPH - local-graph instance
+  RESOURCE-STRING - Resource string
+  NAMESPACE - Optional namespace prefix
+
+Returns:
+  Interned symbol in cl-rdf format
+
+Examples:
+  (intern-rdf-resource graph \"foaf:name\") => foaf@name
+  (intern-rdf-resource graph \":name\" \"foaf\") => foaf@name"
+  (let ((final-resource
+         (cond
+           ((and namespace (alexandria:starts-with-subseq ":" resource-string))
+            (format nil "~A@~A" namespace (subseq resource-string 1)))
+           ((and namespace (not (find #\: resource-string :test #'char=)))
+            (format nil "~A@~A" namespace resource-string))
+           ((find #\: resource-string :test #'char=)
+            (let ((expanded (expand-prefixed-iri graph resource-string)))
+              (substitute #\@ #\: expanded)))
+           (t resource-string))))
+    (intern final-resource)))
+
+(defun parse-ttl-value (graph value-string &optional namespace)
+  "Parse TTL value into appropriate Lisp form.
+
+Arguments:
+  GRAPH - local-graph instance
+  VALUE-STRING - String value from TTL
+  NAMESPACE - Optional namespace prefix
+
+Returns:
+  Parsed value (symbol, string, number, etc.)
+
+Examples:
+  (parse-ttl-value graph \"<http://example.org/foo>\") => symbol
+  (parse-ttl-value graph \"\\\"Alice\\\"\") => \"Alice\""
+  (cond
+    ((string= value-string "a") 'a)
+    ((alexandria:starts-with-subseq "<" value-string)
+     (let ((iri (subseq value-string 1 (1- (length value-string)))))
+       (intern (%compress-iri-with-prefix iri (graph-prefixes graph)))))
+    ((alexandria:starts-with-subseq "\"" value-string)
+     (%parse-quoted-string value-string))
+    ((alexandria:starts-with-subseq "_:" value-string) (bnode))
+    ((find #\: value-string :test #'char=)
+     (intern-rdf-resource graph value-string namespace))
+    (t (intern-rdf-resource graph value-string namespace))))
+
+(defun %parse-quoted-string (value-string)
+  "Helper: Parse quoted string, handle language tags and datatypes."
+  (let* ((content-end (or (position #\" value-string :from-end t) 0))
+         (content (subseq value-string 1 content-end))
+         (rest-of-string (subseq value-string (min (1+ content-end)
+                                                    (length value-string)))))
+    (cond
+      ((alexandria:starts-with-subseq "^^" rest-of-string)
+       (let ((datatype-start (+ 2 (or (position #\< rest-of-string) 0)))
+             (datatype-end (or (position #\> rest-of-string) 0)))
+         (if (and (> datatype-end 0)
+                  (string= "http://www.w3.org/2001/XMLSchema#integer"
+                           (subseq rest-of-string datatype-start datatype-end)))
+             (parse-integer content :junk-allowed t)
+             content)))
+      ((alexandria:starts-with-subseq "@" rest-of-string) content)
+      (t content))))
+
+(defun simple-tokenize-ttl (content)
+  "Tokenize TTL CONTENT string into list of tokens.
+
+Arguments:
+  CONTENT - TTL file content string
+
+Returns:
+  Vector of token strings
+
+Examples:
+  (simple-tokenize-ttl \"@prefix foaf: <...> .\")
+  => #(\"@prefix\" \"foaf:\" \"<...>\" \".\")"
+  (coerce (%tokenize-ttl content) 'vector))
+
+(defun %tokenize-ttl (content)
+  "Helper: Tokenize TTL content, returns list."
+  (let ((tokens nil)
+        (pos 0)
+        (len (length content)))
+    (loop while (< pos len)
+          do (multiple-value-bind (token new-pos)
+                 (%read-next-token content pos len)
+               (when token
+                 (push token tokens))
+               (setf pos new-pos)))
+    (nreverse tokens)))
+
+(defun %read-next-token (content pos len)
+  "Helper: Read next token from content at pos, return (token new-pos)."
+  (let ((ch (char content pos)))
+    (cond
+      ((member ch '(#\Space #\Tab #\Newline #\Return))
+       (values nil (1+ pos)))
+      ((char= ch #\#) (%skip-comment content pos len))
+      ((char= ch #\") (%read-quoted-string content pos len))
+      ((char= ch #\<) (%read-angle-bracket-iri content pos len))
+      ((member ch '(#\; #\. #\, #\[ #\] #\( #\)))
+       (values (string ch) (1+ pos)))
+      (t (%read-regular-token content pos len)))))
+
+(defun %skip-comment (content pos len)
+  "Helper: Skip comment to end of line."
+  (loop while (and (< pos len)
+                   (not (member (char content pos) '(#\Newline #\Return))))
+        do (incf pos))
+  (values nil pos))
+
+(defun %read-quoted-string (content pos len)
+  "Helper: Read quoted string token."
+  (let ((start pos))
+    (incf pos)
+    (loop while (and (< pos len) (char/= (char content pos) #\"))
+          do (when (char= (char content pos) #\\)
+               (incf pos))
+             (incf pos))
+    (when (< pos len) (incf pos))
+    (values (subseq content start pos) pos)))
+
+(defun %read-angle-bracket-iri (content pos len)
+  "Helper: Read angle bracket IRI token."
+  (let ((start pos))
+    (loop while (and (< pos len) (char/= (char content pos) #\>))
+          do (incf pos))
+    (when (< pos len) (incf pos))
+    (values (subseq content start pos) pos)))
+
+(defun %read-regular-token (content pos len)
+  "Helper: Read regular token (prefix, resource, etc.)."
+  (let ((start pos))
+    (loop while (and (< pos len)
+                     (not (member (char content pos)
+                                  '(#\Space #\Tab #\Newline #\Return
+                                    #\; #\, #\< #\" #\[ #\] #\( #\)))))
+          do (incf pos))
+    (values (subseq content start pos) pos)))
+
+(defun parse-rdf-collection (tokens pos graph namespace)
+  "Parse RDF collection ( ... ) into linked list structure.
+
+Arguments:
+  TOKENS - Vector of token strings
+  POS - Current position in tokens
+  GRAPH - local-graph instance
+  NAMESPACE - Optional namespace prefix
+
+Returns:
+  (list-head . (triples . next-pos))
+
+Examples:
+  (parse-rdf-collection tokens 5 graph nil)
+  => (_:G1 . (((triples)) . 10))"
+  (let ((triples nil)
+        (list-head nil)
+        (prev-node nil))
+    (when (and (< pos (length tokens))
+               (string= (aref tokens pos) "("))
+      (incf pos)
+      (if (and (< pos (length tokens))
+               (string= (aref tokens pos) ")"))
+          (progn (incf pos)
+                 (setf list-head 'rdf@nil))
+          (loop while (and (< pos (length tokens))
+                           (not (string= (aref tokens pos) ")")))
+                do (let* ((item (aref tokens pos))
+                          (current-node (bnode))
+                          (parsed-item (if (symbolp item)
+                                           item
+                                           (parse-ttl-value graph item namespace))))
+                     (unless list-head
+                       (setf list-head current-node))
+                     (when prev-node
+                       (push (list prev-node 'rdf@rest current-node) triples))
+                     (push (list current-node 'rdf@first parsed-item) triples)
+                     (setf prev-node current-node)
+                     (incf pos)))
+          (when prev-node
+            (push (list prev-node 'rdf@rest 'rdf@nil) triples))
+          (when (and (< pos (length tokens))
+                     (string= (aref tokens pos) ")"))
+            (incf pos))))
+    (cons (or list-head 'rdf@nil) (cons (nreverse triples) pos))))
+
+(defun parse-blank-node-bracket (tokens pos graph namespace)
+  "Parse blank node bracket [ ... ] into triples.
+
+Arguments:
+  TOKENS - Vector of token strings
+  POS - Current position in tokens
+  GRAPH - local-graph instance
+  NAMESPACE - Optional namespace prefix
+
+Returns:
+  (blank-node . (triples . next-pos))
+
+Examples:
+  (parse-blank-node-bracket tokens 3 graph nil)
+  => (_:G1 . (((triples)) . 8))"
+  (let ((blank-node (bnode))
+        (triples nil)
+        (current-pos pos))
+    (when (and (< current-pos (length tokens))
+               (string= (aref tokens current-pos) "["))
+      (incf current-pos)
+      (loop while (and (< current-pos (length tokens))
+                       (not (string= (aref tokens current-pos) "]")))
+            when (< (1+ current-pos) (length tokens))
+              do (let ((predicate (aref tokens current-pos)))
+                   (incf current-pos)
+                   (setf current-pos
+                         (%parse-bracket-objects tokens current-pos graph namespace
+                                                blank-node predicate triples))
+                   (when (and (< current-pos (length tokens))
+                              (string= (aref tokens current-pos) ";"))
+                     (incf current-pos))))
+      (when (and (< current-pos (length tokens))
+                 (string= (aref tokens current-pos) "]"))
+        (incf current-pos)))
+    (cons blank-node (cons (nreverse triples) current-pos))))
+
+(defun %parse-bracket-objects (tokens pos graph namespace blank-node pred triples)
+  "Helper: Parse objects in bracket notation for predicate. Returns new pos."
+  (let ((current-pos pos))
+    (loop while (and (< current-pos (length tokens))
+                     (not (member (aref tokens current-pos) '(";" "]") :test #'string=)))
+          do (let ((object (aref tokens current-pos)))
+               (unless (string= object ",")
+                 (let ((processed-obj (parse-ttl-value graph object namespace)))
+                   (push (list blank-node pred processed-obj) triples)))
+               (incf current-pos)
+               (when (and (< current-pos (length tokens))
+                          (string= (aref tokens current-pos) ","))
+                 (incf current-pos))))
+    current-pos))
+
+(defun parse-simple-ttl-statement (tokens start-pos graph namespace)
+  "Parse single TTL statement from TOKENS.
+
+Arguments:
+  TOKENS - Vector of token strings
+  START-POS - Starting position
+  GRAPH - local-graph instance
+  NAMESPACE - Optional namespace prefix
+
+Returns:
+  (triples . next-pos)
+
+Examples:
+  (parse-simple-ttl-statement tokens 0 graph nil)
+  => (((triples)) . 5)"
+  (let ((current-pos start-pos)
+        (len (length tokens))
+        (triples nil)
+        (subject nil))
+    (when (< current-pos len)
+      (setf subject (parse-ttl-value graph (aref tokens current-pos) namespace))
+      (incf current-pos)
+      (setf current-pos
+            (%parse-statement-predicates tokens current-pos len graph namespace
+                                        subject triples))
+      (when (and (< current-pos len) (string= (aref tokens current-pos) "."))
+        (incf current-pos)))
+    (cons (nreverse triples) current-pos)))
+
+(defun %parse-statement-predicates (tokens pos len graph ns subject triples)
+  "Helper: Parse predicate-object pairs for statement. Returns new pos."
+  (let ((current-pos pos))
+    (loop while (and (< current-pos len)
+                     (not (string= (aref tokens current-pos) ".")))
+          when (< (1+ current-pos) len)
+            do (let ((predicate (parse-ttl-value graph (aref tokens current-pos) ns)))
+                 (incf current-pos)
+                 (setf current-pos
+                       (%parse-statement-objects tokens current-pos len graph ns
+                                                subject predicate triples))
+                 (when (and (< current-pos len) (string= (aref tokens current-pos) ";"))
+                   (incf current-pos))))
+    current-pos))
+
+(defun %parse-statement-objects (tokens pos len graph ns subj pred triples)
+  "Helper: Parse objects for predicate in statement. Returns new pos."
+  (let ((current-pos pos))
+    (loop while (and (< current-pos len)
+                     (not (member (aref tokens current-pos) '(";" ".") :test #'string=)))
+          do (let ((object (aref tokens current-pos)))
+               (unless (string= object ",")
+                 (let ((parsed-obj (parse-ttl-value graph object ns)))
+                   (push (list subj pred parsed-obj) triples)))
+               (incf current-pos)
+               (when (and (< current-pos len) (string= (aref tokens current-pos) ","))
+                 (incf current-pos))))
+    current-pos))
+
+(defun parse-ttl-content (graph content &optional namespace)
+  "Parse TTL CONTENT string and add triples to GRAPH.
+
+Arguments:
+  GRAPH - local-graph instance
+  CONTENT - TTL file content string
+  NAMESPACE - Optional namespace prefix for resources
+
+Side Effects:
+  Adds triples to graph
+  Registers prefix directives
+
+Examples:
+  (parse-ttl-content graph ttl-string nil)"
+  (%extract-prefix-directives graph content)
+  (let* ((token-list (%tokenize-ttl content))
+         (tokens (coerce token-list 'vector))
+         (pos 0)
+         (len (length tokens)))
+    (loop while (< pos len)
+          do (let ((token (aref tokens pos)))
+               (cond
+                 ((string= token "@prefix")
+                  (setf pos (%skip-prefix-directive tokens pos len)))
+                 ((and token (alexandria:starts-with-subseq "#" token))
+                  (incf pos))
+                 (t
+                  (multiple-value-bind (triples next-pos)
+                      (%parse-and-add-statement tokens pos graph namespace)
+                    (declare (ignore triples))
+                    (setf pos next-pos))))))))
+
+(defun %extract-prefix-directives (graph content)
+  "Helper: Extract @prefix directives from content."
+  (let ((lines (uiop:split-string content :separator '(#\Newline))))
+    (dolist (line lines)
+      (let ((trimmed (string-trim '(#\Space #\Tab) line)))
+        (when (alexandria:starts-with-subseq "@prefix" trimmed)
+          (%register-prefix-from-line graph trimmed))))))
+
+(defun %register-prefix-from-line (graph line)
+  "Helper: Register prefix from @prefix line."
+  (multiple-value-bind (match groups)
+      (cl-ppcre:scan-to-strings "@prefix\\s+(\\S+):\\s*<([^>]+)>" line)
+    (declare (ignore match))
+    (when groups
+      (register-prefix graph (aref groups 0) (aref groups 1)))))
+
+(defun %skip-prefix-directive (tokens pos len)
+  "Helper: Skip @prefix directive tokens."
+  (loop while (and (< pos len)
+                   (not (string= (aref tokens pos) ".")))
+        do (incf pos))
+  (when (< pos len) (incf pos))
+  pos)
+
+(defun %parse-and-add-statement (tokens pos graph namespace)
+  "Helper: Parse statement and add triples to graph."
+  (let ((result (parse-simple-ttl-statement tokens pos graph namespace)))
+    (let ((triples (car result))
+          (next-pos (cdr result)))
+      (dolist (triple triples)
+        (when (= (length triple) 3)
+          (add-triple triple graph)))
+      (values triples next-pos))))
+
+(defun import-ttl (filename graph &optional namespace)
+  "Import TTL file into GRAPH.
+
+Arguments:
+  FILENAME - Path to TTL file
+  GRAPH - local-graph instance
+  NAMESPACE - Optional namespace prefix for resources
+
+Side Effects:
+  Adds triples to graph from TTL file
+  Registers prefix directives
+
+Examples:
+  (import-ttl \"/path/to/file.ttl\" graph)
+  (import-ttl \"/path/to/file.ttl\" graph \"myns\")"
+  (when (probe-file filename)
+    (let ((content (uiop:read-file-string filename)))
+      (parse-ttl-content graph content namespace))
+    graph))
