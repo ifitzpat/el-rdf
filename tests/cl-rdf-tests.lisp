@@ -796,7 +796,7 @@
       ;; Should still return all triples for alice@person (both name and age)
       (is (= 2 (length results)))
       (is (member '(alice@person foaf@name "Alice") results :test #'equal))
-      (is (member '(alice@person foaf@age 30) results :test #'equal)))))
+      (is (member '(alice@person foaf@age 30) results :test #'equal))))
 
 (test triples-query-by-predicate
   "Test retrieving triples by concrete predicate (uses POS index)"
