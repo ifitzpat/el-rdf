@@ -1,0 +1,38 @@
+#!/bin/bash
+# Pre-commit hook for cl-rdf
+# Checks parenthesis balance and function lengths before allowing commit
+
+set -e  # Exit on first error
+
+echo "🔍 Running pre-commit checks..."
+echo ""
+
+# Check 1: Parenthesis balance
+echo "1️⃣  Checking parenthesis balance..."
+if ! ./scripts/check-parens-naive.sh cl-rdf.lisp tests/cl-rdf-tests.lisp 2>&1 | grep -q "✅ All files"; then
+    echo ""
+    echo "❌ Pre-commit BLOCKED: Parenthesis balance check failed"
+    echo ""
+    echo "Fix the parenthesis errors and try again."
+    echo "To skip this check (not recommended): git commit --no-verify"
+    exit 1
+fi
+echo ""
+
+# Check 2: Function length
+echo "2️⃣  Checking function lengths (max 25 lines)..."
+if ! ./scripts/check-function-length.sh; then
+    echo ""
+    echo "⚠️  WARNING: Some functions exceed 25 line limit"
+    echo ""
+    echo "Consider refactoring before committing."
+    echo "To proceed anyway: git commit --no-verify"
+    # Don't exit - this is a warning, not a blocker
+    # Uncomment the line below to make this a hard blocker:
+    # exit 1
+fi
+echo ""
+
+echo "✅ All pre-commit checks passed!"
+echo ""
+exit 0
