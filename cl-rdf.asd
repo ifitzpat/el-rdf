@@ -13,6 +13,7 @@
                #:bordeaux-threads  ; For threading/parallelization
                #:lparallel         ; For parallel map/reduce operations
                #:ironclad          ; For MD5 hashing (content references)
+               #:log4cl            ; Logging framework
                #:uiop)             ; Portable pathname/filesystem operations
 
   :components ((:file "package")

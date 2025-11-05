@@ -13,6 +13,7 @@
                 #:*kernel*
                 #:make-kernel
                 #:end-kernel)
+  (:import-from #:log4cl)
   (:documentation "In-memory RDF triple store for Common Lisp")
 
   ;; Core graph classes and operations

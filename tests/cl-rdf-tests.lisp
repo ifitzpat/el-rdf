@@ -1069,7 +1069,288 @@
     (is (member '(alice foaf@age 30) filtered :test #'equal))))
 
 ;;; ============================================================================
-;;; Phase 6-12: Additional test suites
+;;; Phase 6: Query Execution Engine
+;;; ============================================================================
+
+(in-suite :query)
+
+;; Tests for clean-bindings
+
+(test clean-bindings-removes-t-markers
+  "Test clean-bindings removes success markers (t . value)"
+  (let ((bindings '((($s . alice) (t . alice) ($p . foaf@name))
+                    (($s . bob) (t . bob) ($p . foaf@age)))))
+    (let ((cleaned (clean-bindings bindings)))
+      (is (= 2 (length cleaned)))
+      (is (not (assoc t (first cleaned))))
+      (is (not (assoc t (second cleaned))))
+      (is (assoc '$s (first cleaned)))
+      (is (assoc '$p (first cleaned))))))
+
+(test clean-bindings-empty-list
+  "Test clean-bindings with empty list"
+  (is (null (clean-bindings '()))))
+
+(test clean-bindings-no-t-markers
+  "Test clean-bindings when no t markers present"
+  (let ((bindings '((($s . alice) ($p . foaf@name)))))
+    (let ((cleaned (clean-bindings bindings)))
+      (is (equal bindings cleaned)))))
+
+;; Tests for compatible-bindings-p
+
+(test compatible-bindings-p-same-values
+  "Test compatible-bindings-p returns T when variables bind to same values"
+  (let ((new '(($s . alice) ($p . foaf@name)))
+        (old '((($s . alice) ($age . 30)))))
+    (is (compatible-bindings-p new old))))
+
+(test compatible-bindings-p-different-variables
+  "Test compatible-bindings-p when no overlapping variables"
+  (let ((new '(($p . foaf@name) ($o . "Alice")))
+        (old '((($s . alice)))))
+    (is (compatible-bindings-p new old))))
+
+(test compatible-bindings-p-conflicting-values
+  "Test compatible-bindings-p returns NIL on conflicting bindings"
+  (let ((new '(($s . alice) ($p . foaf@name)))
+        (old '((($s . bob) ($age . 30)))))
+    (is (not (compatible-bindings-p new old)))))
+
+(test compatible-bindings-p-empty-new
+  "Test compatible-bindings-p with empty new bindings"
+  (let ((new '())
+        (old '((($s . alice)))))
+    (is (compatible-bindings-p new old))))
+
+(test compatible-bindings-p-multiple-same-var
+  "Test compatible-bindings-p with multiple checks on same variable"
+  (let ((new '(($s . alice) ($s . alice) ($p . foaf@name)))
+        (old '((($s . alice) ($age . 30)))))
+    (is (compatible-bindings-p new old))))
+
+;; Tests for update-bindings
+
+(test update-bindings-merge-compatible
+  "Test update-bindings merges compatible bindings"
+  (let ((new '((($p . foaf@name) ($o . "Alice"))))
+        (old '((($s . alice) ($age . 30)))))
+    (let ((updated (update-bindings new old)))
+      (is (= 1 (length updated)))
+      (is (assoc '$s (first updated)))
+      (is (assoc '$p (first updated)))
+      (is (assoc '$o (first updated)))
+      (is (assoc '$age (first updated))))))
+
+(test update-bindings-reject-incompatible
+  "Test update-bindings returns NIL on incompatible bindings"
+  (let ((new '((($s . alice)) (($s . bob))))
+        (old '((($s . charlie)))))
+    (let ((updated (update-bindings new old)))
+      (is (null updated)))))
+
+(test update-bindings-nil-new-bindings
+  "Test update-bindings with nil new bindings returns cleaned old"
+  (let ((old '((($s . alice) (t . alice) ($p . foaf@name)))))
+    (let ((updated (update-bindings nil old)))
+      (is (= 1 (length updated)))
+      (is (not (assoc t (first updated)))))))
+
+(test update-bindings-removes-duplicates
+  "Test update-bindings removes duplicate bindings"
+  (let ((new '((($s . alice) ($p . foaf@name))))
+        (old '((($s . alice) ($age . 30)))))
+    (let ((updated (update-bindings new old)))
+      (is (= 1 (length updated)))
+      ;; Count occurrences of $s binding
+      (is (= 1 (count '$s (first updated) :key #'car))))))
+
+(test update-bindings-multiple-new-branches
+  "Test update-bindings with multiple new binding branches"
+  (let ((new '((($p . foaf@name)) (($p . foaf@age))))
+        (old '((($s . alice)))))
+    (let ((updated (update-bindings new old)))
+      (is (= 2 (length updated)))
+      (is (every (lambda (b) (assoc '$s b)) updated))
+      (is (every (lambda (b) (assoc '$p b)) updated)))))
+
+;; Tests for normalize-pattern
+
+(test normalize-pattern-rdf-type-to-a
+  "Test normalize-pattern converts rdf@type to a when no variables"
+  (let ((pattern '(alice rdf@type schema@Person)))
+    (is (equal '(alice a schema@Person) (normalize-pattern pattern)))))
+
+(test normalize-pattern-preserves-with-variables
+  "Test normalize-pattern doesn't convert when variables present"
+  (let ((pattern '($s rdf@type schema@Person)))
+    (is (equal pattern (normalize-pattern pattern))))
+  (let ((pattern '(alice rdf@type $type)))
+    (is (equal pattern (normalize-pattern pattern)))))
+
+(test normalize-pattern-non-rdf-type
+  "Test normalize-pattern doesn't change non-rdf@type patterns"
+  (let ((pattern '(alice foaf@name "Alice")))
+    (is (equal pattern (normalize-pattern pattern)))))
+
+(test normalize-pattern-short-pattern
+  "Test normalize-pattern with pattern shorter than 3 elements"
+  (let ((pattern '(alice foaf@name)))
+    (is (equal pattern (normalize-pattern pattern)))))
+
+;; Tests for optional-clause-p and unwrap-optional
+
+(test optional-clause-p-recognizes-optional
+  "Test optional-clause-p recognizes (optional ...) patterns"
+  (is (optional-clause-p '(optional ($s foaf@name $name))))
+  (is (not (optional-clause-p '($s foaf@name $name)))))
+
+(test unwrap-optional-extracts-pattern
+  "Test unwrap-optional extracts pattern from (optional ...)"
+  (is (equal '($s foaf@name $name)
+             (unwrap-optional '(optional ($s foaf@name $name))))))
+
+(test unwrap-optional-non-optional-unchanged
+  "Test unwrap-optional returns pattern unchanged if not optional"
+  (let ((pattern '($s foaf@name $name)))
+    (is (equal pattern (unwrap-optional pattern)))))
+
+;; Tests for graph-query - comprehensive test suite
+
+(test graph-query-single-clause
+  "Test graph-query with single clause"
+  (let ((graph (make-graph)))
+    (add-triples '((alice foaf@name "Alice")
+                   (bob foaf@name "Bob"))
+                 graph)
+    (let ((result (graph-query '(($s foaf@name $name)) graph)))
+      (is (listp result))
+      (is (= 2 (length result)))
+      ;; Check structure: (((bindings)))
+      (is (every #'consp result))
+      (is (assoc '$s (caar result)))
+      (is (assoc '$name (caar result))))))
+
+(test graph-query-multi-clause
+  "Test graph-query with multiple clauses"
+  (let ((graph (make-graph)))
+    (add-triples '((alice foaf@name "Alice")
+                   (alice foaf@age 30)
+                   (bob foaf@name "Bob"))
+                 graph)
+    (let ((result (graph-query '(($s foaf@name $name)
+                                 ($s foaf@age $age))
+                               graph)))
+      (is (= 1 (length result)))
+      (is (assoc '$s (caar result)))
+      (is (assoc '$name (caar result)))
+      (is (assoc '$age (caar result)))
+      (is (equal 'alice (cdr (assoc '$s (caar result))))))))
+
+(test graph-query-no-match-signals-error
+  "Test graph-query signals pattern-match-failure when pattern doesn't match"
+  (let ((graph (make-graph)))
+    (add-triple '(alice foaf@name "Alice") graph)
+    ;; Pattern doesn't match - should signal error but default handler returns :no-match
+    (let ((result (graph-query '(($s foaf@nonexistent $x)) graph)))
+      (is (eq :no-match result)))))
+
+(test graph-query-optional-clause-success
+  "Test graph-query with OPTIONAL clause that matches"
+  (let ((graph (make-graph)))
+    (add-triples '((alice foaf@name "Alice")
+                   (alice foaf@age 30)
+                   (bob foaf@name "Bob"))
+                 graph)
+    (let ((result (graph-query '(($s foaf@name $name)
+                                 (optional ($s foaf@age $age)))
+                               graph)))
+      (is (= 2 (length result)))
+      ;; Alice should have both name and age
+      (let ((alice-result (find 'alice result
+                                :key (lambda (r) (cdr (assoc '$s (car r)))))))
+        (is alice-result)
+        (is (assoc '$age (car alice-result))))
+      ;; Bob should have only name (age was optional)
+      (let ((bob-result (find 'bob result
+                              :key (lambda (r) (cdr (assoc '$s (car r)))))))
+        (is bob-result)
+        (is (assoc '$name (car bob-result)))))))
+
+(test graph-query-optional-clause-failure
+  "Test graph-query with OPTIONAL clause that doesn't match"
+  (let ((graph (make-graph)))
+    (add-triples '((alice foaf@name "Alice")
+                   (bob foaf@name "Bob"))
+                 graph)
+    ;; Optional clause fails but query should still succeed
+    (let ((result (graph-query '(($s foaf@name $name)
+                                 (optional ($s foaf@age $age)))
+                               graph)))
+      (is (= 2 (length result)))
+      ;; Neither should have age binding
+      (is (every (lambda (r) (not (assoc '$age (car r)))) result)))))
+
+(test graph-query-empty-bindings
+  "Test graph-query with pattern that has no variables"
+  (let ((graph (make-graph)))
+    (add-triple '(alice foaf@name "Alice") graph)
+    ;; Pattern matches but no variables to bind
+    (let ((result (graph-query '((alice foaf@name "Alice")) graph)))
+      ;; Should return empty list (not :no-match)
+      (is (listp result)))))
+
+(test graph-query-multiple-branches
+  "Test graph-query that creates multiple binding branches"
+  (let ((graph (make-graph)))
+    (add-triples '((alice foaf@knows bob)
+                   (alice foaf@knows charlie)
+                   (bob foaf@name "Bob")
+                   (charlie foaf@name "Charlie"))
+                 graph)
+    (let ((result (graph-query '((alice foaf@knows $friend)
+                                 ($friend foaf@name $fname))
+                               graph)))
+      (is (= 2 (length result)))
+      (is (member "Bob" result :key (lambda (r) (cdr (assoc '$fname (car r)))) :test #'equal))
+      (is (member "Charlie" result :key (lambda (r) (cdr (assoc '$fname (car r)))) :test #'equal)))))
+
+(test graph-query-with-rdf-type
+  "Test graph-query handles rdf@type equivalence"
+  (let ((graph (make-graph)))
+    (add-triple '(alice a schema@Person) graph)
+    ;; Query with rdf@type should match triple with 'a
+    (let ((result (graph-query '((alice rdf@type $type)) graph)))
+      (is (listp result))
+      (is (plusp (length result))))))
+
+(test graph-query-calls-query-hooks
+  "Test graph-query calls registered query hooks"
+  (let ((graph (make-graph))
+        (hook-called nil))
+    (add-triple '(alice foaf@name "Alice") graph)
+    (add-hook-to-graph graph 'query-hooks
+                       (lambda (g op data)
+                         (setf hook-called t)))
+    (graph-query '(($s foaf@name $name)) graph)
+    (is hook-called)))
+
+(test graph-query-handler-can-override-error
+  "Test caller can override pattern-match-failure with custom handler"
+  (let ((graph (make-graph)))
+    (add-triple '(alice foaf@name "Alice") graph)
+    ;; Override default handler to use empty bindings restart
+    (let ((result (handler-bind ((pattern-match-failure
+                                   (lambda (c)
+                                     (declare (ignore c))
+                                     (invoke-restart 'use-empty-bindings))))
+                    (graph-query '(($s foaf@nonexistent $x)) graph))))
+      ;; Should return empty list instead of :no-match
+      (is (listp result))
+      (is (null result)))))
+
+;;; ============================================================================
+;;; Phase 7-12: Additional test suites
 ;;; ============================================================================
 
 ;; Tests for remaining phases will be added as implementation progresses
