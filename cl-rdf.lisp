@@ -2266,6 +2266,44 @@ Examples:
                          :if-does-not-exist :create)
       (write-string serialized out))))
 
+(defun %convert-el-to-cl-in-string (content)
+  "Convert el-rdf format to cl-rdf in string, preserving strings and keywords.
+
+Replaces : with @ outside of quoted strings to convert
+namespace:resource to namespace@resource format.
+Preserves keywords (symbols starting with :)."
+  (with-output-to-string (out)
+    (loop with in-string = nil
+          with escape-next = nil
+          with prev-char = nil
+          for ch across content
+          do (cond
+               (escape-next
+                (write-char ch out)
+                (setf escape-next nil
+                      prev-char ch))
+               ((and (char= ch #\\) in-string)
+                (write-char ch out)
+                (setf escape-next t
+                      prev-char ch))
+               ((char= ch #\")
+                (write-char ch out)
+                (setf in-string (not in-string)
+                      prev-char ch))
+               ;; Replace : with @ only if:
+               ;; - not in string
+               ;; - previous char is alphanumeric (not at start of symbol, so not a keyword)
+               ((and (char= ch #\:)
+                     (not in-string)
+                     prev-char
+                     (or (alphanumericp prev-char)
+                         (char= prev-char #\-)))
+                (write-char #\@ out)
+                (setf prev-char #\@))
+               (t
+                (write-char ch out)
+                (setf prev-char ch))))))
+
 (defun load-graph (graph filename)
   "Load triples from FILENAME into GRAPH with auto-format detection.
 
@@ -2286,10 +2324,6 @@ Side Effects:
 Examples:
   (load-graph my-graph \"/tmp/data.rdf\")"
   (let* ((content (uiop:read-file-string filename))
-         ;; Pre-process: replace : with @ to avoid package issues
-         ;; This handles el-rdf format conversion before reading
-         (processed (cl-ppcre:regex-replace-all "([a-zA-Z0-9_-]+):([a-zA-Z0-9_#-]+)"
-                                                 content
-                                                 "\\1@\\2"))
+         (processed (%convert-el-to-cl-in-string content))
          (triples (read-from-string processed)))
     (add-triples triples graph)))

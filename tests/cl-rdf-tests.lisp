@@ -2079,9 +2079,9 @@
 
 (test el-rdf-symbol-p-detects-el-format
   "Test el-rdf-symbol-p detects el-rdf format symbols"
-  (is (el-rdf-symbol-p 'foaf:name))
-  (is (el-rdf-symbol-p 'schema:Person))
-  (is (el-rdf-symbol-p 'rdf:type)))
+  (is (el-rdf-symbol-p '|foaf:name|))
+  (is (el-rdf-symbol-p '|schema:Person|))
+  (is (el-rdf-symbol-p '|rdf:type|)))
 
 (test el-rdf-symbol-p-rejects-cl-format
   "Test el-rdf-symbol-p rejects cl-rdf format"
@@ -2106,9 +2106,9 @@
 
 (test convert-symbol-el-to-cl-basic
   "Test convert-symbol-el-to-cl converts namespace:resource"
-  (is (eq 'foaf@name (convert-symbol-el-to-cl 'foaf:name)))
-  (is (eq 'schema@Person (convert-symbol-el-to-cl 'schema:Person)))
-  (is (eq 'rdf@type (convert-symbol-el-to-cl 'rdf:type))))
+  (is (eq 'foaf@name (convert-symbol-el-to-cl '|foaf:name|)))
+  (is (eq 'schema@Person (convert-symbol-el-to-cl '|schema:Person|)))
+  (is (eq 'rdf@type (convert-symbol-el-to-cl '|rdf:type|))))
 
 (test convert-symbol-el-to-cl-preserves-cl-format
   "Test convert-symbol-el-to-cl leaves cl-rdf symbols unchanged"
@@ -2132,25 +2132,25 @@
 
 (test convert-triple-el-to-cl-basic
   "Test convert-triple-el-to-cl converts entire triple"
-  (let ((el-triple '(alice foaf:name "Alice"))
+  (let ((el-triple '(alice |foaf:name| "Alice"))
         (cl-triple '(alice foaf@name "Alice")))
     (is (equal cl-triple (convert-triple-el-to-cl el-triple)))))
 
 (test convert-triple-el-to-cl-mixed-format
   "Test convert-triple-el-to-cl handles mixed el/cl format"
-  (let ((mixed '(alice foaf:name "Alice"))
+  (let ((mixed '(alice |foaf:name| "Alice"))
         (expected '(alice foaf@name "Alice")))
     (is (equal expected (convert-triple-el-to-cl mixed)))))
 
 (test convert-triple-el-to-cl-preserves-strings
   "Test convert-triple-el-to-cl preserves string objects"
-  (let ((triple '(bob foaf:bio "A long biography"))
+  (let ((triple '(bob |foaf:bio| "A long biography"))
         (expected '(bob foaf@bio "A long biography")))
     (is (equal expected (convert-triple-el-to-cl triple)))))
 
 (test convert-triple-el-to-cl-with-rdf-type
   "Test convert-triple-el-to-cl handles rdf:type"
-  (let ((el-triple '(alice rdf:type foaf:Person))
+  (let ((el-triple '(alice |rdf:type| |foaf:Person|))
         (cl-triple '(alice rdf@type foaf@Person)))
     (is (equal cl-triple (convert-triple-el-to-cl el-triple)))))
 
@@ -2190,14 +2190,14 @@
 (test load-graph-el-format-conversion
   "Test load-graph auto-converts el-rdf format to cl-rdf"
   (let* ((tmpfile (format nil "/tmp/cl-rdf-test-~A.rdf" (get-universal-time)))
-         (el-format-triples '((alice foaf:name "Alice")
-                              (bob foaf:age 30)
-                              (charlie rdf:type foaf:Person))))
-    ;; Write el-rdf format file directly
+         (el-format-triples '((alice |foaf:name| "Alice")
+                              (bob |foaf:age| 30)
+                              (charlie |rdf:type| |foaf:Person|))))
+    ;; Write el-rdf format file directly (symbols with : will be written with pipes)
     (with-open-file (out tmpfile
                          :direction :output
                          :if-exists :supersede)
-      (write el-format-triples :stream out :case :downcase))
+      (write el-format-triples :stream out :case :downcase :readably t))
 
     ;; Load and verify conversion
     (let ((graph (make-graph)))

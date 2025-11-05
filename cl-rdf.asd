@@ -14,7 +14,6 @@
                #:lparallel         ; For parallel map/reduce operations
                #:ironclad          ; For MD5 hashing (content references)
                #:log4cl            ; Logging framework
-               #:cl-ppcre          ; Regular expressions (format conversion)
                #:uiop)             ; Portable pathname/filesystem operations
 
   :components ((:file "package")
