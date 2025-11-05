@@ -399,6 +399,70 @@
       (is (= 1 (length (cdr (assoc 'schema@knows spo-entry)))))
       (is (member 'Bob (cdr (assoc 'schema@knows spo-entry)))))))
 
+;; Tests for expand-duals
+
+(test expand-duals-empty
+  "Test expand-duals with empty alist"
+  (let ((result (expand-duals nil 'subject)))
+    (is (null result))))
+
+(test expand-duals-spo-order
+  "Test expand-duals with SPO order (default)"
+  ;; Input: ((pred1 . (obj1 obj2)) (pred2 . (obj3)))
+  ;; Element: subject
+  ;; Output: ((subject pred1 obj1) (subject pred1 obj2) (subject pred2 obj3))
+  (let ((duals '((schema@name . ("John" "Johnny"))
+                 (schema@age . (30)))))
+    (let ((result (expand-duals duals 'John)))
+      (is (= 3 (length result)))
+      (is (member '(John schema@name "John") result :test #'equal))
+      (is (member '(John schema@name "Johnny") result :test #'equal))
+      (is (member '(John schema@age 30) result :test #'equal)))))
+
+(test expand-duals-osp-order
+  "Test expand-duals with OSP order"
+  ;; Input: ((subj1 . (pred1 pred2)) (subj2 . (pred3)))
+  ;; Element: object
+  ;; Reorder: 'osp
+  ;; Output: ((subj1 pred1 object) (subj1 pred2 object) (subj2 pred3 object))
+  (let ((duals '((John . (schema@name schema@age))
+                 (Jane . (schema@name)))))
+    (let ((result (expand-duals duals "John Doe" :osp)))
+      (is (= 3 (length result)))
+      (is (member '(John schema@name "John Doe") result :test #'equal))
+      (is (member '(John schema@age "John Doe") result :test #'equal))
+      (is (member '(Jane schema@name "John Doe") result :test #'equal)))))
+
+(test expand-duals-pos-order
+  "Test expand-duals with POS order"
+  ;; Input: ((obj1 . (subj1 subj2)) (obj2 . (subj3)))
+  ;; Element: predicate
+  ;; Reorder: 'pos
+  ;; Output: ((subj1 predicate obj1) (subj2 predicate obj1) (subj3 predicate obj2))
+  (let ((duals '((schema@Person . (John Jane))
+                 (schema@Company . (Acme)))))
+    (let ((result (expand-duals duals 'a :pos)))
+      (is (= 3 (length result)))
+      (is (member '(John a schema@Person) result :test #'equal))
+      (is (member '(Jane a schema@Person) result :test #'equal))
+      (is (member '(Acme a schema@Company) result :test #'equal)))))
+
+(test expand-duals-single-value
+  "Test expand-duals with single value lists"
+  (let ((duals '((pred . (obj)))))
+    (let ((result (expand-duals duals 'subj)))
+      (is (= 1 (length result)))
+      (is (equal '(subj pred obj) (first result))))))
+
+(test expand-duals-complex-values
+  "Test expand-duals with complex values (cons pairs)"
+  ;; This is used internally with predicate-object pairs
+  (let ((duals '((pred1 . (obj1 obj2)))))
+    (let ((result (expand-duals duals 'subj)))
+      (is (= 2 (length result)))
+      (is (member '(subj pred1 obj1) result :test #'equal))
+      (is (member '(subj pred1 obj2) result :test #'equal)))))
+
 ;;; ============================================================================
 ;;; Phase 3: Hook System
 ;;; ============================================================================
