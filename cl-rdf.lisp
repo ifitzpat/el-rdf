@@ -6,14 +6,9 @@
 ;;;; These improve performance without requiring separate code
 
 ;; Inline small utility functions (called frequently)
+;; These are safe and provide significant performance benefits
 (declaim (inline variablep wildcardp var-or-wildp
                  content-reference-p el-rdf-symbol-p))
-
-;; Type declarations for hot paths
-(declaim (ftype (function (t) boolean) variablep wildcardp var-or-wildp))
-(declaim (ftype (function (list local-graph) null) add-triple))
-(declaim (ftype (function (list local-graph) list) triples))
-(declaim (ftype (function (list list &optional list) (or null list)) pat-match))
 
 ;;;; Core Data Structures
 
