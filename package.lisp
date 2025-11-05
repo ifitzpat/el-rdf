@@ -131,4 +131,6 @@
            #:remote-graph
            #:make-remote-graph
            #:remote-graph-url
-           #:remote-graph-token))
+           #:remote-graph-token
+           #:register-graph-for-http
+           #:unregister-graph-for-http))

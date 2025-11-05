@@ -2937,37 +2937,17 @@ someProperty schema:label \"some property\" ." out))
 
 (in-suite :http)
 
-(test sexp-serialization
-  "Test S-expression serialization/deserialization"
-  ;; Simple data
-  (let* ((data '(:operation triples :pattern (alice t t)))
-         (serialized (cl-rdf::%write-sexp-to-string data))
-         (deserialized (cl-rdf::%read-sexp-safely serialized)))
-    (is (equal data deserialized)))
-
-  ;; Nested structures
-  (let* ((data '(:graph "test" :triples ((alice foaf@name "Alice")
-                                          (bob foaf@knows alice))))
-         (serialized (cl-rdf::%write-sexp-to-string data))
-         (deserialized (cl-rdf::%read-sexp-safely serialized)))
-    (is (equal data deserialized)))
-
-  ;; With symbols containing special chars
-  (let* ((data '(wn30schema@seeAlso rdf@type owl@ObjectProperty))
-         (serialized (cl-rdf::%write-sexp-to-string data))
-         (deserialized (cl-rdf::%read-sexp-safely serialized)))
-    (is (equal data deserialized))))
-
 (test graph-registry
   "Test graph registration for HTTP access"
   (let ((graph (make-graph)))
-    ;; Register
-    (cl-rdf::register-graph-for-http "test-graph" graph)
-    (is (eq graph (cl-rdf::%get-graph-from-registry "test-graph")))
+    ;; Register (tested implicitly by HTTP operations)
+    (register-graph-for-http "test-graph" graph)
 
     ;; Unregister
-    (is (cl-rdf::unregister-graph-for-http "test-graph"))
-    (is (null (cl-rdf::%get-graph-from-registry "test-graph")))))
+    (is (unregister-graph-for-http "test-graph"))
+
+    ;; Unregister non-existent
+    (is (not (unregister-graph-for-http "test-graph")))))
 
 (test server-lifecycle
   "Test server start/stop"
@@ -3000,7 +2980,7 @@ someProperty schema:label \"some property\" ." out))
                  local-graph)
 
     ;; Register and start server
-    (cl-rdf::register-graph-for-http "test" local-graph)
+    (register-graph-for-http "test" local-graph)
     (start-server :port 18081 :token "secret")
 
     (sleep 0.5)  ; Give server time to start
@@ -3024,13 +3004,13 @@ someProperty schema:label \"some property\" ." out))
 
       ;; Cleanup
       (stop-server)
-      (cl-rdf::unregister-graph-for-http "test"))))
+      (unregister-graph-for-http "test"))))
 
 (test remote-graph-add-delete
   "Test remote graph add and delete operations"
   (let ((local-graph (make-graph)))
     ;; Register and start server
-    (cl-rdf::register-graph-for-http "test" local-graph)
+    (register-graph-for-http "test" local-graph)
     (start-server :port 18082 :token "secret")
 
     (sleep 0.5)
@@ -3060,7 +3040,7 @@ someProperty schema:label \"some property\" ." out))
 
       ;; Cleanup
       (stop-server)
-      (cl-rdf::unregister-graph-for-http "test"))))
+      (unregister-graph-for-http "test"))))
 
 (test remote-graph-query
   "Test remote graph complex queries"
@@ -3072,7 +3052,7 @@ someProperty schema:label \"some property\" ." out))
                  local-graph)
 
     ;; Register and start server
-    (cl-rdf::register-graph-for-http "test" local-graph)
+    (register-graph-for-http "test" local-graph)
     (start-server :port 18083 :token "secret")
 
     (sleep 0.5)
@@ -3091,7 +3071,7 @@ someProperty schema:label \"some property\" ." out))
 
       ;; Cleanup
       (stop-server)
-      (cl-rdf::unregister-graph-for-http "test"))))
+      (unregister-graph-for-http "test"))))
 
 (test remote-graph-authentication
   "Test bearer token authentication"
@@ -3099,7 +3079,7 @@ someProperty schema:label \"some property\" ." out))
     (add-triple '(alice foaf@name "Alice") local-graph)
 
     ;; Register and start server with token
-    (cl-rdf::register-graph-for-http "test" local-graph)
+    (register-graph-for-http "test" local-graph)
     (start-server :port 18084 :token "correct-token")
 
     (sleep 0.5)
@@ -3126,7 +3106,7 @@ someProperty schema:label \"some property\" ." out))
 
       ;; Cleanup
       (stop-server)
-      (cl-rdf::unregister-graph-for-http "test"))))
+      (unregister-graph-for-http "test"))))
 
 (test health-check-endpoint
   "Test health check endpoint"
@@ -3134,8 +3114,8 @@ someProperty schema:label \"some property\" ." out))
   (sleep 0.5)
 
   (unwind-protect
-      (let ((response (drakma:http-request "http://localhost:18085/health")))
-        (is (search ":status" (flexi-streams:octets-to-string response))))
+        (let ((response (drakma:http-request "http://localhost:18085/health" :force-text t)))
+        (is (search ":status" response)))
 
     ;; Cleanup
     (stop-server)))

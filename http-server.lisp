@@ -496,12 +496,10 @@ Side Effects:
                              :content-type "application/sexp"
                              :additional-headers headers
                              :connection-timeout (remote-graph-timeout graph)
-                             :want-stream nil)
+                             :want-stream nil
+                             :force-text t)
 
-      (let ((response-data (%read-sexp-safely
-                            (if (stringp response)
-                                response
-                                (flexi-streams:octets-to-string response :external-format :utf-8)))))
+      (let ((response-data (%read-sexp-safely response)))
 
         (cond
           ((= status-code 200)
