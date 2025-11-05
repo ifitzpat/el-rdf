@@ -854,23 +854,37 @@ git commit -m "Implement function-name with tests"
 - `namespace` - Extract namespace from symbol
 - `make-graph` - Create graph structure
 
-✅ **Phase 2: Triple Storage** (7/7 functions)
+✅ **Phase 2: Triple Storage + Threading** (7/7 functions + threading)
 - `update-dual` - Alist manipulation helper
 - `remove-dual` - Alist manipulation helper
-- `add-triple` - Single triple addition with index maintenance
-- `delete-triple` - Single triple deletion with cleanup
-- `expand-duals` - Convert alist to triple list
-- `add-triples` - Bulk addition with hook triggers
-- `delete-triples` - Bulk deletion with hook triggers
+- `add-triple` - Single triple addition with index maintenance (✅ thread-safe with mutex)
+- `delete-triple` - Single triple deletion with cleanup (✅ thread-safe with mutex)
+- `expand-duals` - Convert alist to triple list (✅ parallel processing for 100+ items)
+- `add-triples` - Bulk addition with hook triggers (✅ parallel processing for 100+ items)
+- `delete-triples` - Bulk deletion with hook triggers (✅ parallel processing for 100+ items)
 
-**Threading Evaluations**:
-- `update-dual`: No benefit (simple alist operation)
-- `remove-dual`: No benefit (simple alist operation)
-- `add-triple`: Potential for batch operations
-- `delete-triple`: Potential for batch operations
-- `expand-duals`: GOOD candidate (independent entries)
-- `add-triples`: EXCELLENT candidate (independent triple processing)
-- `delete-triples`: EXCELLENT candidate (independent triple processing)
+**Threading Implementation Status**:
+- ✅ Added `lock` slot to graph class (bordeaux-threads mutex)
+- ✅ Protected `add-triple` with `with-lock-held` for thread safety
+- ✅ Protected `delete-triple` with `with-lock-held` for thread safety
+- ✅ Parallel processing in `expand-duals` (4 threads for 100+ entries)
+- ✅ Parallel processing in `add-triples` (4 threads for 100+ triples)
+- ✅ Parallel processing in `delete-triples` (4 threads for 100+ triples)
+- ✅ Hook guarantee maintained: All hooks run after parallel operations complete
+- ✅ All tests passing on CI (SBCL)
+
+**Threading Performance**:
+- Threshold: 100+ items triggers parallel mode
+- Thread count: 4 threads (hardcoded for now)
+- Expected speedup: ~4x for large TTL imports
+
+**Threading Future Work**:
+- [ ] **Query system for actual CPU count**: Currently hardcoded to 4 threads. Need to implement portable CPU detection:
+  - SBCL: `sb-ext:cpu-count` (tried, had issues - needs investigation)
+  - CCL: `ccl:cpu-count`
+  - Allegro: `sys:cpu-count`
+  - Fallback: 4 threads
+  - Consider making configurable via special variable `*max-threads*`
 
 ### Current Phase
 
