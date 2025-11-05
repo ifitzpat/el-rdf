@@ -214,3 +214,51 @@ See also: ADD-TRIPLE, IMPORT-TTL"
          (at-pos (position #\@ name)))
     (when (and at-pos (plusp at-pos))
       (subseq name 0 at-pos))))
+
+;;;; ============================================================================
+;;;; Phase 2: Triple Storage
+;;;; ============================================================================
+
+;;; -----------------------------------------------------------------------------
+;;; Alist Manipulation Helpers
+;;; -----------------------------------------------------------------------------
+
+(defun update-dual (key val orig)
+  "Add VAL to the list of values associated with KEY in alist ORIG.
+
+This function maintains the triple index structure where each key maps to a
+list of values. If KEY doesn't exist, a new entry is created. If KEY exists,
+VAL is added to its list (unless already present). The function avoids
+duplicate values.
+
+Arguments:
+  KEY  - The key to update (typically a symbol).
+  VAL  - The value to add to the key's list (can be any Lisp object).
+  ORIG - The original alist structure.
+
+Returns:
+  Updated alist with VAL added to KEY's list.
+
+Structure:
+  Input/Output format: ((key1 . (val1 val2 ...)) (key2 . (val3 val4 ...)) ...)
+
+Examples:
+  (update-dual 'subject '(pred . obj) nil)
+  ; => ((subject . ((pred . obj))))
+
+  (update-dual 'subject '(pred2 . obj2) '((subject . ((pred1 . obj1)))))
+  ; => ((subject . ((pred2 . obj2) (pred1 . obj1))))
+
+See also: REMOVE-DUAL, ADD-TRIPLE"
+  (let* ((entry (assoc key orig))
+         (oldval (cdr entry)))
+    (if oldval
+        ;; Key exists - add val if not already present
+        (progn
+          (setf (cdr entry)
+                (if (member val oldval :test #'equal)
+                    oldval
+                    (cons val oldval)))
+          orig)
+        ;; Key doesn't exist - add new entry
+        (append `((,key . ,(list val))) orig))))

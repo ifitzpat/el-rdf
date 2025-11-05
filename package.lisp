@@ -39,6 +39,10 @@
            #:rdf
            #:make-rdf-symbol)
 
+  ;; Alist manipulation helpers (used internally by triple storage)
+  (:export #:update-dual
+           #:remove-dual)
+
   ;; Hook system
   (:export #:add-hook-to-graph
            #:remove-hook-from-graph
