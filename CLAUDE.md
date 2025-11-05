@@ -110,6 +110,16 @@ This script:
 **If tests fail**:
 The script shows the failed step name and provides a link to view full details on GitHub.
 
+#### Requesting User Input
+
+When you need user input before continuing (e.g., clarification, decision on implementation approach), send a notification:
+
+```bash
+curl -d "your message to me" ntfy.sh/ian-claude
+```
+
+This will get the user's attention. Use this when you're blocked and need direction to proceed.
+
 ### Important Notes for cl-rdf Development
 
 1. **Always write tests before implementation** - This is non-negotiable for the port
