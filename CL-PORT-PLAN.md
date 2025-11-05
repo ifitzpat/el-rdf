@@ -1011,11 +1011,44 @@ git commit -m "Implement function-name with tests"
 - All functions under 30-line limit ✅
 - Integration tests verify roundtrip through add-triple and triples
 
+✅ **Phase 9: Serialization and Format Conversion** (7/7 functions)
+
+**Serialization**:
+- `triples-to-string` - Serialize with proper symbol escaping (1 line)
+
+**Format Conversion (el-rdf → cl-rdf)**:
+- `el-rdf-symbol-p` - Detect el-rdf format symbols namespace:resource (7 lines)
+- `convert-symbol-el-to-cl` - Convert namespace:resource to namespace@resource (5 lines)
+- `convert-triple-el-to-cl` - Convert entire triple (3 lines)
+- `%convert-el-to-cl-in-string` - String processor for format conversion (26 lines, internal)
+
+**Graph Persistence**:
+- `save-graph` - Save to file in cl-rdf format using raw-triples (7 lines)
+- `load-graph` - Load with auto-detection and conversion from el-rdf (5 lines)
+
+**Implementation Notes**:
+- Auto-detects el-rdf format and converts to cl-rdf on load
+- Always saves in cl-rdf format (namespace@resource)
+- Preserves content references via raw-triples
+- Handles symbols with # correctly via write-to-string
+- String processor respects string boundaries and preserves keywords
+- Variables ($name) and keywords (:keyword) not converted
+- 30 comprehensive tests covering all edge cases
+- All functions under 30 lines ✅
+
+**Migration Path**: Load el-rdf graphs and re-save in cl-rdf format
+
+**Technical Details**:
+- CL reader interprets `foaf:name` as package:symbol, causing errors
+- Solution: Character-by-character string processing before reading
+- Only converts `:` when preceded by alphanumeric (not keywords)
+- Test files use pipe notation `|foaf:name|` for el-rdf format symbols
+
 ### Current Phase
 
-🔄 **Phase 9: Serialization (File I/O)** (0/? functions)
+🔄 **Phase 10: Checkpointing System** (0/? functions)
 - Next phase to be implemented
-- See lines 269-293 for details
+- See lines 295-308 for details
 
 ## Next Steps
 
@@ -1034,7 +1067,8 @@ git commit -m "Implement function-name with tests"
 13. ✅ Complete Phase 6: Query Execution Engine (13/13 + condition system)
 14. ✅ Complete Phase 7: Query Operations (11/11 - ASK, SELECT, FILTER, CONSTRUCT, DELETE-DATA)
 15. ✅ Complete Phase 8: Content Reference System (6/6 - large string storage with MD5 deduplication)
-16. 🔄 Begin Phase 9: Serialization (File I/O)
+16. ✅ Complete Phase 9: Serialization and Format Conversion (7/7 - save/load with el-rdf migration support)
+17. 🔄 Begin Phase 10: Checkpointing System
 
 ---
 
