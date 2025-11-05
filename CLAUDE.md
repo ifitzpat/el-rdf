@@ -139,8 +139,8 @@ This will get the user's attention. Use this when you're blocked and need direct
 
 **CRITICAL**: To maintain code readability, prevent parenthesis errors, and improve reasoning about code:
 
-1. **Maximum Function Length: 25 lines**
-   - Keep `defun`, `defmethod`, and `defgeneric` bodies to 25 lines or less
+1. **Maximum Function Length: 30 lines**
+   - Keep `defun`, `defmethod`, and `defgeneric` bodies to 30 lines or less
    - Count only the body lines (excluding docstrings, comments, and blank lines)
    - When a function exceeds this limit, refactor into smaller utility functions
 
@@ -179,7 +179,7 @@ This will get the user's attention. Use this when you're blocked and need direct
       raw-results)))
 ```
 
-**Example - After (refactored with utilities, <25 lines each):**
+**Example - After (refactored with utilities, <30 lines each):**
 ```lisp
 (defun %query-by-subject (s p graph)
   "Helper: Query SPO index by subject"

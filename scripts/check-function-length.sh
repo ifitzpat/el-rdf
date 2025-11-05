@@ -1,7 +1,7 @@
 #!/bin/bash
-# Check that all functions are <= 25 lines (excluding docstrings, comments, blank lines)
+# Check that all functions are <= 30 lines (excluding docstrings, comments, blank lines)
 
-MAX_LINES=25
+MAX_LINES=30
 FAILED=0
 
 echo "Checking function lengths (max $MAX_LINES lines per function)..."

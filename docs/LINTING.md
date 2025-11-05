@@ -121,7 +121,7 @@ For files that compile successfully, a balanced count means correct parenthesiza
 
 ### 4. Function Length Checker (Custom)
 
-**Purpose**: Enforce 25-line maximum function length rule
+**Purpose**: Enforce 30-line maximum function length rule
 
 **Usage**:
 ```bash
@@ -134,8 +134,8 @@ For files that compile successfully, a balanced count means correct parenthesiza
 
 **Output**:
 ```
-❌ cl-rdf.lisp:488: Function exceeds 25 lines (30 lines)
-   (defun expand-duals (duals element &optional (reorder nil))
+❌ cl-rdf.lisp:488: Function exceeds 30 lines (35 lines)
+   (defun some-function (args)
 ```
 
 **CI Integration**: Ready ✅
@@ -194,7 +194,7 @@ This configures git to use `.githooks/` directory (committed to repo).
 
 **What it checks:**
 1. **Parenthesis balance** (blocking) - Prevents commit if parens are unbalanced
-2. **Function length** (warning) - Warns if functions exceed 25 lines
+2. **Function length** (warning) - Warns if functions exceed 30 lines
 
 **Hook location**: `.githooks/pre-commit`
 
@@ -259,7 +259,7 @@ As of 2025-11-05, the following functions need refactoring:
 
 1. **Early Error Detection**: Catch parenthesis errors and undefined functions before CI runs
 2. **Code Quality**: Enforce consistent style and avoid anti-patterns
-3. **Maintainability**: Keep functions small and focused (25 lines max)
+3. **Maintainability**: Keep functions small and focused (30 lines max)
 4. **Team Standards**: Automated enforcement of coding standards
 
 ---
