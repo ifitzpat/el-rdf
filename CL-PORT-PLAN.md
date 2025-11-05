@@ -943,11 +943,28 @@ git commit -m "Implement function-name with tests"
 - All functions under 30-line limit ✅
 - **TODO**: Nested OPTIONAL not yet supported (documented limitation)
 
+✅ **Phase 7: Query Operations (Partial - ASK, CONSTRUCT, DELETE-DATA)** (4/4 functions)
+- `ask` - Boolean query with error handling (13 lines)
+- `expand-list-bindings` - Expand list objects into multiple triples (14 lines)
+- `construct` - Build triples from template + bindings (10 lines)
+- `delete-data` - Pattern-based deletion with hooks (13 lines)
+
+**Implementation Notes**:
+- All functions use handler-case for graceful error handling
+- ASK returns NIL on pattern-match-failure (never signals error)
+- CONSTRUCT integrates with expand-list-bindings for list expansion
+- DELETE-DATA uses graph-query + construct + delete-triples pipeline
+- 29 comprehensive test cases covering all scenarios
+- All functions under 30-line limit ✅
+
+**Deferred for discussion**:
+- SELECT and related helpers (binding-val, bindings-from-row)
+- FILTER and related helpers (eval-with-bindings)
+
 ### Current Phase
 
-🔄 **Phase 7: Query Operations** (0/? functions)
-- Next phase to be implemented
-- See lines 227-262 for details
+🔄 **Phase 7: Query Operations (SELECT, FILTER)** - Awaiting user discussion
+- See lines 227-262 for complete Phase 7 details
 
 ## Next Steps
 
@@ -964,7 +981,8 @@ git commit -m "Implement function-name with tests"
 11. ✅ Complete Phase 4: Triple Retrieval (2/2)
 12. ✅ Complete Phase 5: Pattern Matching (5/5)
 13. ✅ Complete Phase 6: Query Execution Engine (13/13 + condition system)
-14. 🔄 Begin Phase 7: Query Operations
+14. ✅ Complete Phase 7 (Partial): ASK, CONSTRUCT, DELETE-DATA (4/4)
+15. 🔄 Discuss and implement SELECT and FILTER (Phase 7 remainder)
 
 ---
 
