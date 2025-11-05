@@ -499,11 +499,11 @@ See also: TRIPLES, RAW-TRIPLES"
                                   (:osp  (list key value element))      ; OSP
                                   (:pos  (list value element key)))))   ; POS
       ;; Large dataset - parallel processing
-      (let* ((num-threads (min #+sbcl (sb-ext:cpu-count)
-                               #+ccl (ccl:cpu-count)
-                               #+allegro (sys:cpu-count)
-                               #-(or sbcl ccl allegro) 4
-                               4))  ; Use actual CPU count, capped at 4
+      (let* ((cpu-count #+sbcl (sb-ext:cpu-count)
+                        #+ccl (ccl:cpu-count)
+                        #+allegro (sys:cpu-count)
+                        #-(or sbcl ccl allegro) 4)
+             (num-threads (min cpu-count 4))  ; Use actual CPU count, capped at 4
              (chunk-size (ceiling (/ (length duals) num-threads)))
              (chunks (loop for i from 0 below (length duals) by chunk-size
                            collect (subseq duals i (min (+ i chunk-size) (length duals)))))
@@ -581,11 +581,11 @@ See also: ADD-TRIPLE, DELETE-TRIPLES, GRAPH-ADD-HOOKS"
       ;; Small dataset - sequential processing
       (mapc (lambda (triple) (add-triple triple graph)) triplist)
       ;; Large dataset - parallel processing
-      (let* ((num-threads (min #+sbcl (sb-ext:cpu-count)
-                               #+ccl (ccl:cpu-count)
-                               #+allegro (sys:cpu-count)
-                               #-(or sbcl ccl allegro) 4
-                               4))  ; Use actual CPU count, capped at 4
+      (let* ((cpu-count #+sbcl (sb-ext:cpu-count)
+                        #+ccl (ccl:cpu-count)
+                        #+allegro (sys:cpu-count)
+                        #-(or sbcl ccl allegro) 4)
+             (num-threads (min cpu-count 4))  ; Use actual CPU count, capped at 4
              (chunk-size (ceiling (/ (length triplist) num-threads)))
              (chunks (loop for i from 0 below (length triplist) by chunk-size
                            collect (subseq triplist i (min (+ i chunk-size) (length triplist)))))
@@ -656,11 +656,11 @@ See also: DELETE-TRIPLE, ADD-TRIPLES, GRAPH-DELETE-HOOKS"
       ;; Small dataset - sequential processing
       (mapc (lambda (triple) (delete-triple triple graph)) triplist)
       ;; Large dataset - parallel processing
-      (let* ((num-threads (min #+sbcl (sb-ext:cpu-count)
-                               #+ccl (ccl:cpu-count)
-                               #+allegro (sys:cpu-count)
-                               #-(or sbcl ccl allegro) 4
-                               4))  ; Use actual CPU count, capped at 4
+      (let* ((cpu-count #+sbcl (sb-ext:cpu-count)
+                        #+ccl (ccl:cpu-count)
+                        #+allegro (sys:cpu-count)
+                        #-(or sbcl ccl allegro) 4)
+             (num-threads (min cpu-count 4))  ; Use actual CPU count, capped at 4
              (chunk-size (ceiling (/ (length triplist) num-threads)))
              (chunks (loop for i from 0 below (length triplist) by chunk-size
                            collect (subseq triplist i (min (+ i chunk-size) (length triplist)))))
