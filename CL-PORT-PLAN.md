@@ -980,11 +980,42 @@ git commit -m "Implement function-name with tests"
 - DISTINCT, ORDER BY, LIMIT/OFFSET
 - Aggregation (GROUP BY, COUNT, etc.)
 
+✅ **Phase 8: Content Reference System** (6/6 functions)
+
+**Content Reference Predicates**:
+- `content-reference-p` - Detect file reference format (5 lines)
+
+**Content Storage and Retrieval**:
+- `%ensure-content-cache-dir` - Initialize cache directory (7 lines, internal)
+- `%compute-content-hash` - MD5 hashing with Ironclad (4 lines, internal)
+- `store-large-content` - Store strings >1000 chars as files (14 lines)
+- `resolve-content-reference` - Read content from file (7 lines)
+
+**Triple Object Processing**:
+- `process-triple-object` - Convert large objects to references (3 lines)
+- `resolve-triple-object` - Resolve single triple's object (4 lines)
+- `resolve-triple-objects` - Batch resolution for triples (2 lines)
+
+**Integration**:
+- ✅ `add-triple` now calls `process-triple-object` on objects
+- ✅ `triples` now calls `resolve-triple-objects` before returning
+- ✅ `raw-triples` preserves references for serialization
+
+**Implementation Notes**:
+- Cache directory: `XDG_CACHE_HOME/cl-rdf/` (not `el-rdf/`)
+- Threshold: 1000 characters (`*content-reference-threshold*`)
+- File format: `file:content-<md5-hash>.txt`
+- Deduplication: Same content = same hash = same file
+- MD5 hashing via Ironclad library
+- 21 comprehensive test cases covering all scenarios
+- All functions under 30-line limit ✅
+- Integration tests verify roundtrip through add-triple and triples
+
 ### Current Phase
 
-🔄 **Phase 8: Content Reference System** (0/? functions)
+🔄 **Phase 9: Serialization (File I/O)** (0/? functions)
 - Next phase to be implemented
-- See lines 253-268 for details
+- See lines 269-293 for details
 
 ## Next Steps
 
@@ -1002,7 +1033,8 @@ git commit -m "Implement function-name with tests"
 12. ✅ Complete Phase 5: Pattern Matching (5/5)
 13. ✅ Complete Phase 6: Query Execution Engine (13/13 + condition system)
 14. ✅ Complete Phase 7: Query Operations (11/11 - ASK, SELECT, FILTER, CONSTRUCT, DELETE-DATA)
-15. 🔄 Begin Phase 8: Content Reference System
+15. ✅ Complete Phase 8: Content Reference System (6/6 - large string storage with MD5 deduplication)
+16. 🔄 Begin Phase 9: Serialization (File I/O)
 
 ---
 
