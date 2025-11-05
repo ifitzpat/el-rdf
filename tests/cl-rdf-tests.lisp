@@ -166,7 +166,47 @@
 
 (in-suite :storage)
 
-;; Storage tests will be added here
+;; Tests for alist manipulation helpers used in triple indices
+
+(test update-dual-new-key
+  "Test update-dual with a new key"
+  ;; Start with empty alist
+  (let ((result (update-dual 'key1 'val1 nil)))
+    (is (equal '((key1 . (val1))) result)))
+  ;; Start with existing different keys
+  (let ((result (update-dual 'key3 'val3 '((key1 . (val1)) (key2 . (val2))))))
+    (is (equal 3 (length result)))
+    (is (equal '(val3) (cdr (assoc 'key3 result))))))
+
+(test update-dual-existing-key
+  "Test update-dual adding to existing key"
+  ;; Add new value to existing key
+  (let ((result (update-dual 'key1 'val2 '((key1 . (val1))))))
+    (is (equal 1 (length result)))
+    (is (equal 2 (length (cdr (assoc 'key1 result)))))
+    (is (member 'val1 (cdr (assoc 'key1 result))))
+    (is (member 'val2 (cdr (assoc 'key1 result))))))
+
+(test update-dual-duplicate-value
+  "Test update-dual doesn't add duplicate values"
+  ;; Try to add value that already exists
+  (let* ((initial '((key1 . (val1 val2))))
+         (result (update-dual 'key1 'val1 initial)))
+    (is (equal 1 (length result)))
+    (is (equal 2 (length (cdr (assoc 'key1 result)))))
+    (is (member 'val1 (cdr (assoc 'key1 result))))
+    (is (member 'val2 (cdr (assoc 'key1 result))))))
+
+(test update-dual-complex-values
+  "Test update-dual with complex values (cons pairs)"
+  ;; Used for storing (predicate . object) pairs in triple indices
+  (let* ((initial nil)
+         (result1 (update-dual 'subject1 '(pred1 . obj1) initial))
+         (result2 (update-dual 'subject1 '(pred2 . obj2) result1)))
+    (is (equal 1 (length result2)))
+    (is (equal 2 (length (cdr (assoc 'subject1 result2)))))
+    (is (member '(pred1 . obj1) (cdr (assoc 'subject1 result2)) :test #'equal))
+    (is (member '(pred2 . obj2) (cdr (assoc 'subject1 result2)) :test #'equal))))
 
 ;;; ============================================================================
 ;;; Phase 3: Hook System
