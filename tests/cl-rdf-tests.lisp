@@ -533,6 +533,101 @@
     (add-triples '((John schema@name "John")) g)
     (is (not (null (gethash 'John (graph-spo g)))))))
 
+;; Tests for delete-triples
+
+(test delete-triples-basic
+  "Test deleting multiple triples at once"
+  (let ((g (make-graph)))
+    ;; Add some triples first
+    (add-triples '((John schema@name "John Doe")
+                   (John schema@age 30)
+                   (Jane schema@name "Jane Doe"))
+                 g)
+    ;; Delete two of them
+    (delete-triples '((John schema@name "John Doe")
+                      (Jane schema@name "Jane Doe"))
+                    g)
+    ;; John's age should remain
+    (let ((john-entry (gethash 'John (graph-spo g))))
+      (is (not (null john-entry)))
+      (is (member 30 (cdr (assoc 'schema@age john-entry)))))
+    ;; Jane should be completely removed
+    (is (null (gethash 'Jane (graph-spo g))))))
+
+(test delete-triples-empty-list
+  "Test delete-triples with empty list"
+  (let ((g (make-graph)))
+    ;; Add a triple
+    (add-triple '(John schema@name "John") g)
+    ;; Delete empty list should not error
+    (delete-triples nil g)
+    ;; Triple should still be there
+    (is (not (null (gethash 'John (graph-spo g)))))))
+
+(test delete-triples-calls-hooks
+  "Test that delete-triples calls delete-hooks"
+  (let ((g (make-graph))
+        (hook-called nil)
+        (hook-operation nil)
+        (hook-data nil))
+    ;; Add a triple
+    (add-triple '(John schema@name "John") g)
+    ;; Add a delete hook
+    (push (lambda (graph operation data)
+            (setf hook-called t)
+            (setf hook-operation operation)
+            (setf hook-data data))
+          (graph-delete-hooks g))
+    ;; Delete triples
+    (delete-triples '((John schema@name "John")) g)
+    ;; Hook should have been called
+    (is (eq t hook-called))
+    (is (eq 'delete-triples hook-operation))
+    (is (equal '((John schema@name "John")) hook-data))))
+
+(test delete-triples-multiple-hooks
+  "Test that all delete-hooks are called"
+  (let ((g (make-graph))
+        (hook1-called nil)
+        (hook2-called nil))
+    ;; Add a triple
+    (add-triple '(John schema@name "John") g)
+    ;; Add two hooks
+    (push (lambda (graph operation data)
+            (declare (ignore graph operation data))
+            (setf hook1-called t))
+          (graph-delete-hooks g))
+    (push (lambda (graph operation data)
+            (declare (ignore graph operation data))
+            (setf hook2-called t))
+          (graph-delete-hooks g))
+    ;; Delete triples
+    (delete-triples '((John schema@name "John")) g)
+    ;; Both hooks should be called
+    (is (eq t hook1-called))
+    (is (eq t hook2-called))))
+
+(test delete-triples-no-hooks
+  "Test delete-triples works with no hooks registered"
+  (let ((g (make-graph)))
+    ;; Add and delete without hooks
+    (add-triple '(John schema@name "John") g)
+    ;; Should not error when no hooks present
+    (delete-triples '((John schema@name "John")) g)
+    (is (null (gethash 'John (graph-spo g))))))
+
+(test delete-triples-nonexistent
+  "Test deleting triples that don't exist"
+  (let ((g (make-graph)))
+    ;; Add one triple
+    (add-triple '(John schema@name "John") g)
+    ;; Try to delete different triples
+    (delete-triples '((Jane schema@name "Jane")
+                      (Bob schema@age 25))
+                    g)
+    ;; Original triple should still exist
+    (is (not (null (gethash 'John (graph-spo g)))))))
+
 ;;; ============================================================================
 ;;; Phase 3: Hook System
 ;;; ============================================================================
