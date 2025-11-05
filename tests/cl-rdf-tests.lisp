@@ -2502,7 +2502,195 @@
     (delete-checkpoint "test-complex")))
 
 ;;; ============================================================================
-;;; Phase 11-12: Additional test suites
+;;; Phase 11: TTL Import Tests
+;;; ============================================================================
+
+(in-suite :ttl)
+
+;;; Basic TTL Import Tests
+
+(test import-ttl-basic
+  "Test basic TTL import with prefixes"
+  (let ((graph (make-graph))
+        (tmpfile (format nil "/tmp/cl-rdf-ttl-~A.ttl" (get-universal-time))))
+    (with-open-file (out tmpfile :direction :output :if-exists :supersede)
+      (write-string "@prefix schema: <https://schema.org/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+schema@Person rdf@type rdfs@Class .
+schema@Person rdfs@label \"Person\" .
+schema@name rdf@type rdf@Property .
+schema@name rdfs@label \"name\" ." out))
+
+    (import-ttl tmpfile graph)
+
+    (let ((all-triples (triples '(t t t) graph)))
+      (is (= 4 (length all-triples)))
+      (is (ask '((schema@Person rdf@type rdfs@Class)) graph))
+      (is (ask '((schema@name rdfs@label "name")) graph)))
+
+    (delete-file tmpfile)))
+
+(test import-ttl-rdf-collections-complex
+  "Test RDF collections with owl:unionOf - must not create malformed symbols"
+  (let ((graph (make-graph))
+        (tmpfile (format nil "/tmp/cl-rdf-collection-~A.ttl" (get-universal-time))))
+    (with-open-file (out tmpfile :direction :output :if-exists :supersede)
+      (write-string "@prefix wn30schema: <http://example.org/wn30schema/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+wn30schema@seeAlso a owl@ObjectProperty ;
+    rdfs@domain [ a owl@Class ;
+                  owl@unionOf ( wn30schema@AdjectiveWordSense wn30schema@VerbWordSense ) ] ;
+    rdfs@range [ a owl@Class ;
+                 owl@unionOf ( wn30schema@VerbWordSense wn30schema@AdjectiveWordSense ) ] ." out))
+
+    (import-ttl tmpfile graph)
+
+    (let ((all-triples (triples '(t t t) graph)))
+      ;; Check no malformed symbols with ( or )
+      (dolist (triple all-triples)
+        (dolist (elem triple)
+          (when (symbolp elem)
+            (let ((name (symbol-name elem)))
+              (is (not (find #\( name)))
+              (is (not (find #\) name)))))))
+
+      ;; Should have owl@unionOf relationships
+      (let ((union-triples (remove-if-not
+                            (lambda (tr) (eq (second tr) 'owl@unionOf))
+                            all-triples)))
+        (is (= 2 (length union-triples))))
+
+      ;; Should have rdf@first and rdf@rest triples
+      (is (some (lambda (tr) (eq (second tr) 'rdf@first)) all-triples))
+      (is (some (lambda (tr) (eq (second tr) 'rdf@rest)) all-triples)))
+
+    (delete-file tmpfile)))
+
+(test import-ttl-blank-nodes
+  "Test blank node import"
+  (let ((graph (make-graph))
+        (tmpfile (format nil "/tmp/cl-rdf-blanks-~A.ttl" (get-universal-time))))
+    (with-open-file (out tmpfile :direction :output :if-exists :supersede)
+      (write-string "@prefix ex: <http://example.org/> .
+
+_:person1 ex@name \"Alice\" .
+_:person2 ex@knows _:person1 ." out))
+
+    (import-ttl tmpfile graph)
+
+    (let ((all-triples (triples '(t t t) graph)))
+      (is (= 2 (length all-triples)))
+      ;; Subjects should be blank nodes (_:G...)
+      (dolist (triple all-triples)
+        (is (symbolp (first triple)))
+        (is (alexandria:starts-with-subseq "_:" (symbol-name (first triple))))))
+
+    (delete-file tmpfile)))
+
+(test import-ttl-blank-node-brackets
+  "Test blank node bracket notation [ ... ]"
+  (let ((graph (make-graph))
+        (tmpfile (format nil "/tmp/cl-rdf-brackets-~A.ttl" (get-universal-time))))
+    (with-open-file (out tmpfile :direction :output :if-exists :supersede)
+      (write-string "@prefix frame: <http://example.org/frame/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+frame@Killing rdfs@subClassOf [ a owl@Restriction ;
+                                 owl@onProperty frame@hasComponent ] ." out))
+
+    (import-ttl tmpfile graph)
+
+    (let ((all-triples (triples '(t t t) graph)))
+      ;; Should parse bracket notation into separate triples
+      (is (>= (length all-triples) 3))
+
+      ;; Check no malformed symbols with [ or ]
+      (dolist (triple all-triples)
+        (dolist (elem triple)
+          (when (symbolp elem)
+            (is (not (find #\[ (symbol-name elem))))
+            (is (not (find #\] (symbol-name elem))))))))
+
+    (delete-file tmpfile)))
+
+(test import-ttl-literals-and-datatypes
+  "Test various literal types"
+  (let ((graph (make-graph))
+        (tmpfile (format nil "/tmp/cl-rdf-literals-~A.ttl" (get-universal-time))))
+    (with-open-file (out tmpfile :direction :output :if-exists :supersede)
+      (write-string "@prefix ex: <http://example.org/> .
+
+ex@person ex@name \"John Doe\" .
+ex@person ex@age \"30\"^^<http://www.w3.org/2001/XMLSchema#integer> .
+ex@person ex@description \"A person\"@en ." out))
+
+    (import-ttl tmpfile graph)
+
+    (is (ask '((ex@person ex@name "John Doe")) graph))
+    (is (ask '((ex@person ex@age 30)) graph))
+    (is (ask '((ex@person ex@description "A person")) graph)))
+
+    (delete-file tmpfile))
+
+(test import-ttl-comments
+  "Test TTL with comments and empty lines"
+  (let ((graph (make-graph))
+        (tmpfile (format nil "/tmp/cl-rdf-comments-~A.ttl" (get-universal-time))))
+    (with-open-file (out tmpfile :direction :output :if-exists :supersede)
+      (write-string "@prefix ex: <http://example.org/> .
+
+# Comment line
+ex@alice ex@name \"Alice\" .
+
+# Another comment
+ex@bob ex@name \"Bob\" ." out))
+
+    (import-ttl tmpfile graph)
+
+    (let ((all-triples (triples '(t t t) graph)))
+      (is (= 2 (length all-triples))))
+
+    (delete-file tmpfile)))
+
+(test import-ttl-empty-collection
+  "Test empty RDF collection ()"
+  (let ((graph (make-graph))
+        (tmpfile (format nil "/tmp/cl-rdf-empty-coll-~A.ttl" (get-universal-time))))
+    (with-open-file (out tmpfile :direction :output :if-exists :supersede)
+      (write-string "@prefix ex: <http://example.org/> .
+
+ex@emptyList ex@value () ." out))
+
+    (import-ttl tmpfile graph)
+
+    (is (ask '((ex@emptyList ex@value rdf@nil)) graph))
+
+    (delete-file tmpfile)))
+
+(test import-ttl-with-namespace-prefix
+  "Test import with namespace parameter"
+  (let ((graph (make-graph))
+        (tmpfile (format nil "/tmp/cl-rdf-ns-~A.ttl" (get-universal-time))))
+    (with-open-file (out tmpfile :direction :output :if-exists :supersede)
+      (write-string "@prefix schema: <https://schema.org/> .
+
+:hasOccupation schema@label \"has occupation\" .
+someProperty schema@label \"some property\" ." out))
+
+    (import-ttl tmpfile graph "myschema")
+
+    (is (ask '((myschema@hasOccupation schema@label "has occupation")) graph))
+    (is (ask '((myschema@someProperty schema@label "some property")) graph))
+
+    (delete-file tmpfile)))
+
+;;; ============================================================================
+;;; Phase 12: Additional test suites
 ;;; ============================================================================
 
 ;; Tests for remaining phases will be added as implementation progresses
