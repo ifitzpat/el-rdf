@@ -128,34 +128,34 @@
     ;; Should be symbols
     (is (symbolp bn1))
     (is (symbolp bn2))
-    ;; Should start with _. (cl-rdf uses period separator)
-    (is (alexandria:starts-with-subseq "_." (symbol-name bn1)))
-    (is (alexandria:starts-with-subseq "_." (symbol-name bn2)))
+    ;; Should start with _@ (cl-rdf uses at-sign separator)
+    (is (alexandria:starts-with-subseq "_@" (symbol-name bn1)))
+    (is (alexandria:starts-with-subseq "_@" (symbol-name bn2)))
     ;; Should be unique (different blank nodes)
     (is (not (eq bn1 bn2)))
     ;; Generate multiple and verify they're all different
     (let ((nodes (loop repeat 10 collect (bnode))))
       ;; All should be symbols
       (is (every #'symbolp nodes))
-      ;; All should start with _.
+      ;; All should start with _@
       (is (every (lambda (n)
-                   (alexandria:starts-with-subseq "_." (symbol-name n)))
+                   (alexandria:starts-with-subseq "_@" (symbol-name n)))
                  nodes))
       ;; All should be unique
       (is (= (length nodes) (length (remove-duplicates nodes)))))))
 
 (test namespace
   "Test namespace extraction from symbols"
-  ;; Symbols with namespace.resource format
-  (is (string= "schema" (namespace '|schema.Person|)))
-  (is (string= "foaf" (namespace '|foaf.name|)))
-  (is (string= "rdf" (namespace '|rdf.type|)))
-  ;; Symbols without namespace (no period)
+  ;; Symbols with namespace@resource format (no vertical bars needed!)
+  (is (string= "schema" (namespace 'schema@Person)))
+  (is (string= "foaf" (namespace 'foaf@name)))
+  (is (string= "rdf" (namespace 'rdf@type)))
+  ;; Symbols without namespace (no at-sign)
   (is (null (namespace 'Person)))
   (is (null (namespace 'name)))
   (is (null (namespace 'a)))
-  ;; Blank nodes should return nil (they start with _.)
-  (is (null (namespace '|_.G1234|)))
+  ;; Blank nodes should return nil (they start with _@)
+  (is (null (namespace '_@G1234)))
   ;; Variables should return nil (they start with $)
   (is (null (namespace '$subject)))
   (is (null (namespace '$name))))

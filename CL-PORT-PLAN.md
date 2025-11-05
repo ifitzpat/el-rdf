@@ -21,18 +21,19 @@ This document outlines the plan for porting `el-rdf.el` to Common Lisp as `cl-rd
 2. Use a different separator like `/` or `.` (e.g., `namespace/resource`)
 3. Use symbols with escaped colons (e.g., `|namespace:resource|`)
 4. Use `|` as separator (e.g., `namespace|resource`) - **doesn't work, needs outer bars**
-5. Implement a custom reader macro
+5. Use `-` (hyphen) - idiomatic but less distinct
+6. Use `_` (underscore) - clear but less Lispy
+7. Implement a custom reader macro
 
-**Chosen Solution**: Use **period separator** for RDF resources: `namespace.resource`
-- ✅ Clean syntax, no escaping needed
+**Chosen Solution**: Use **at-sign separator** for RDF resources: `namespace@resource`
+- ✅ Clean syntax, no escaping or vertical bars needed
 - ✅ Valid CL symbol without special reader syntax
-- ✅ Natural "namespace.member" semantics
-- ✅ Familiar from other languages (Java, Python, JS)
+- ✅ Distinctive as namespace separator
 - ✅ **SPARQL-safe**: Won't conflict with SPARQL 1.1 property paths (`/`, `|`, `^`, etc.)
-- ✅ Easy to type and read
-- Helper macro: `(rdf namespace resource)` expands to `namespace.resource`
-- Conversion needed between el-rdf (`:`) and cl-rdf (`.`) formats
-- **TODO**: Handle periods in resource names during TTL import (e.g., `resource.v2` should not be split)
+- ✅ Easy to type and read: `schema@Person`, `foaf@name`, `rdf@type`
+- ✅ No ambiguity with resource names (@ is not common in resource identifiers)
+- Helper macro: `(rdf namespace resource)` expands to `namespace@resource`
+- Conversion needed between el-rdf (`:`) and cl-rdf (`@`) formats
 
 ### 2. SPARQL Variables
 

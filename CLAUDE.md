@@ -20,8 +20,8 @@ el-rdf is an in-memory RDF triple store implemented in Emacs Lisp. It provides S
 
 **Symbol Format**:
 - **el-rdf**: Uses colon separator `namespace:resource` (e.g., `schema:Person`, `foaf:name`)
-- **cl-rdf**: Uses period separator `namespace.resource` (e.g., `schema.Person`, `foaf.name`)
-- **Reason**: Colon is reserved for CL packages; period won't conflict with SPARQL 1.1 property paths
+- **cl-rdf**: Uses at-sign separator `namespace@resource` (e.g., `schema@Person`, `foaf@name`)
+- **Reason**: Colon is reserved for CL packages; at-sign is clean, doesn't require vertical bars in CL source, and won't conflict with SPARQL 1.1 property paths
 
 **Variables**:
 - Both use `$variable` syntax (e.g., `$subject`, `$name`) - works in both languages
