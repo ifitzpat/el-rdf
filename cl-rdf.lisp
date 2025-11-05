@@ -436,3 +436,50 @@ See also: ADD-TRIPLE, DELETE-TRIPLES, TRIPLES"
               (remhash predicate pos))))))
 
   nil)
+
+;;; -----------------------------------------------------------------------------
+;;; Duals Expansion
+;;; -----------------------------------------------------------------------------
+
+(defun expand-duals (duals element &optional (reorder nil))
+  "Expand alist structure into list of triples.
+
+This function converts the internal alist representation used in the triple
+indices into a flat list of triples. The REORDER parameter determines the
+order of elements in each triple.
+
+Arguments:
+  DUALS   - Alist structure: ((key . (val1 val2 ...)) ...)
+  ELEMENT - The element to include in each expanded triple
+  REORDER - Optional keyword to control triple ordering:
+            NIL (default) - SPO order: (element key value)
+            :OSP          - OSP order: (key value element)
+            :POS          - POS order: (value element key)
+
+Returns:
+  List of triples (each triple is a list of 3 elements)
+
+Structure Transformation:
+  Input:  ((key1 . (val1 val2)) (key2 . (val3)))
+  Output: ((element key1 val1) (element key1 val2) (element key2 val3))
+
+Examples:
+  ;; SPO order (default)
+  (expand-duals '((schema@name . (\"John\")) (schema@age . (30))) 'Person1)
+  ; => ((Person1 schema@name \"John\") (Person1 schema@age 30))
+
+  ;; OSP order
+  (expand-duals '((John . (schema@name schema@age))) \"John Doe\" :osp)
+  ; => ((John schema@name \"John Doe\") (John schema@age \"John Doe\"))
+
+  ;; POS order
+  (expand-duals '((schema@Person . (John Jane))) 'a :pos)
+  ; => ((John a schema@Person) (Jane a schema@Person))
+
+See also: TRIPLES, RAW-TRIPLES"
+  (loop for (key . values) in duals
+        nconc (loop for value in values
+                    collect (ecase reorder
+                              ((nil) (list element key value))      ; SPO
+                              (:osp  (list key value element))      ; OSP
+                              (:pos  (list value element key))))))  ; POS
