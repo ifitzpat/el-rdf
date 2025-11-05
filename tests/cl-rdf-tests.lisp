@@ -1350,7 +1350,246 @@
       (is (null result)))))
 
 ;;; ============================================================================
-;;; Phase 7-12: Additional test suites
+;;; Phase 7: Query Operations (ASK, CONSTRUCT, DELETE-DATA)
+;;; ============================================================================
+
+;; Tests for ASK
+
+(test ask-pattern-matches
+  "Test ask returns T when pattern matches"
+  (let ((graph (make-graph)))
+    (add-triples '((alice foaf@name "Alice")
+                   (bob foaf@name "Bob"))
+                 graph)
+    (is (ask '(($s foaf@name $name)) graph))))
+
+(test ask-pattern-no-match
+  "Test ask returns NIL when pattern doesn't match"
+  (let ((graph (make-graph)))
+    (add-triple '(alice foaf@name "Alice") graph)
+    (is (not (ask '(($s foaf@age $age)) graph)))))
+
+(test ask-empty-graph
+  "Test ask returns NIL on empty graph"
+  (let ((graph (make-graph)))
+    (is (not (ask '(($s foaf@name $name)) graph)))))
+
+(test ask-concrete-pattern-matches
+  "Test ask with concrete pattern that matches"
+  (let ((graph (make-graph)))
+    (add-triple '(alice foaf@name "Alice") graph)
+    (is (ask '((alice foaf@name "Alice")) graph))))
+
+(test ask-concrete-pattern-no-match
+  "Test ask with concrete pattern that doesn't match"
+  (let ((graph (make-graph)))
+    (add-triple '(alice foaf@name "Alice") graph)
+    (is (not (ask '((alice foaf@name "Bob")) graph)))))
+
+(test ask-multi-clause-matches
+  "Test ask with multiple clauses that all match"
+  (let ((graph (make-graph)))
+    (add-triples '((alice foaf@name "Alice")
+                   (alice foaf@age 30))
+                 graph)
+    (is (ask '(($s foaf@name "Alice")
+               ($s foaf@age 30))
+             graph))))
+
+(test ask-multi-clause-no-match
+  "Test ask with multiple clauses where one doesn't match"
+  (let ((graph (make-graph)))
+    (add-triple '(alice foaf@name "Alice") graph)
+    (is (not (ask '(($s foaf@name "Alice")
+                    ($s foaf@age 30))
+                  graph)))))
+
+;; Tests for expand-list-bindings
+
+(test expand-list-bindings-single-triple
+  "Test expand-list-bindings with single triple (no list)"
+  (let ((result (expand-list-bindings '((alice foaf@name "Alice")))))
+    (is (= 1 (length result)))
+    (is (equal '(alice foaf@name "Alice") (first result)))))
+
+(test expand-list-bindings-list-object
+  "Test expand-list-bindings expands list in object position"
+  (let ((result (expand-list-bindings '((alice foaf@knows (bob charlie))))))
+    (is (= 2 (length result)))
+    (is (member '(alice foaf@knows bob) result :test #'equal))
+    (is (member '(alice foaf@knows charlie) result :test #'equal))))
+
+(test expand-list-bindings-multiple-triples
+  "Test expand-list-bindings with multiple triples"
+  (let ((result (expand-list-bindings '((alice foaf@name "Alice")
+                                        (bob foaf@name "Bob")))))
+    (is (= 2 (length result)))
+    (is (member '(alice foaf@name "Alice") result :test #'equal))
+    (is (member '(bob foaf@name "Bob") result :test #'equal))))
+
+(test expand-list-bindings-mixed
+  "Test expand-list-bindings with mix of list and non-list objects"
+  (let ((result (expand-list-bindings '((alice foaf@knows (bob charlie))
+                                        (alice foaf@name "Alice")))))
+    (is (= 3 (length result)))
+    (is (member '(alice foaf@knows bob) result :test #'equal))
+    (is (member '(alice foaf@knows charlie) result :test #'equal))
+    (is (member '(alice foaf@name "Alice") result :test #'equal))))
+
+(test expand-list-bindings-empty-list
+  "Test expand-list-bindings with empty input"
+  (is (null (expand-list-bindings '()))))
+
+;; Tests for construct
+
+(test construct-simple
+  "Test construct with simple variable substitution"
+  (let* ((graph (make-graph))
+         (_ (add-triples '((alice foaf@name "Alice")
+                           (bob foaf@name "Bob"))
+                         graph))
+         (bindings (graph-query '(($s foaf@name $name)) graph))
+         (result (construct '(($s rdf@type foaf@Person)) bindings)))
+    (declare (ignore _))
+    (is (= 2 (length result)))
+    (is (member '(alice rdf@type foaf@Person) result :test #'equal))
+    (is (member '(bob rdf@type foaf@Person) result :test #'equal))))
+
+(test construct-multiple-clauses
+  "Test construct with multiple template clauses"
+  (let* ((graph (make-graph))
+         (_ (add-triples '((alice foaf@name "Alice")
+                           (alice foaf@age 30))
+                         graph))
+         (bindings (graph-query '(($s foaf@name $name)
+                                  ($s foaf@age $age))
+                                graph))
+         (result (construct '(($s rdf@type foaf@Person)
+                              ($s schema@verified t))
+                            bindings)))
+    (declare (ignore _))
+    (is (= 2 (length result)))
+    (is (member '(alice rdf@type foaf@Person) result :test #'equal))
+    (is (member '(alice schema@verified t) result :test #'equal))))
+
+(test construct-with-list-expansion
+  "Test construct expands list objects into multiple triples"
+  (let* ((graph (make-graph))
+         (_ (add-triple '(alice foaf@name "Alice") graph))
+         ;; Manually create bindings with list in object position
+         (bindings '(((($s . alice) ($friends . (bob charlie))))))
+         (result (construct '(($s foaf@knows $friends)) bindings)))
+    (declare (ignore _))
+    (is (= 2 (length result)))
+    (is (member '(alice foaf@knows bob) result :test #'equal))
+    (is (member '(alice foaf@knows charlie) result :test #'equal))))
+
+(test construct-no-matches
+  "Test construct with no bindings returns empty list"
+  (let ((result (construct '(($s rdf@type foaf@Person)) '())))
+    (is (null result))))
+
+(test construct-preserves-concrete-values
+  "Test construct preserves concrete (non-variable) values in template"
+  (let* ((graph (make-graph))
+         (_ (add-triple '(alice foaf@name "Alice") graph))
+         (bindings (graph-query '(($s foaf@name "Alice")) graph))
+         (result (construct '(($s foaf@knows bob)) bindings)))
+    (declare (ignore _))
+    (is (= 1 (length result)))
+    (is (equal '(alice foaf@knows bob) (first result)))))
+
+;; Tests for delete-data
+
+(test delete-data-single-match
+  "Test delete-data removes matching triples"
+  (let ((graph (make-graph)))
+    (add-triples '((alice foaf@name "Alice")
+                   (bob foaf@name "Bob"))
+                 graph)
+    (is (delete-data '((alice foaf@name "Alice")) graph))
+    ;; Verify alice's triple is gone
+    (is (not (ask '((alice foaf@name "Alice")) graph)))
+    ;; Verify bob's triple remains
+    (is (ask '((bob foaf@name "Bob")) graph))))
+
+(test delete-data-variable-pattern
+  "Test delete-data with variable pattern deletes all matches"
+  (let ((graph (make-graph)))
+    (add-triples '((alice foaf@name "Alice")
+                   (bob foaf@name "Bob")
+                   (charlie foaf@name "Charlie"))
+                 graph)
+    ;; Delete all foaf@name triples
+    (is (delete-data '(($s foaf@name $name)) graph))
+    ;; Verify all name triples are gone
+    (is (not (ask '(($s foaf@name $name)) graph)))))
+
+(test delete-data-no-match
+  "Test delete-data returns NIL when pattern doesn't match"
+  (let ((graph (make-graph)))
+    (add-triple '(alice foaf@name "Alice") graph)
+    (is (not (delete-data '(($s foaf@age $age)) graph)))
+    ;; Verify original triple still exists
+    (is (ask '((alice foaf@name "Alice")) graph))))
+
+(test delete-data-empty-graph
+  "Test delete-data on empty graph returns NIL"
+  (let ((graph (make-graph)))
+    (is (not (delete-data '(($s foaf@name $name)) graph)))))
+
+(test delete-data-multi-clause
+  "Test delete-data with multiple clauses (join pattern)"
+  (let ((graph (make-graph)))
+    (add-triples '((alice foaf@name "Alice")
+                   (alice foaf@age 30)
+                   (bob foaf@name "Bob")
+                   (bob foaf@age 25))
+                 graph)
+    ;; Delete all triples for people named "Alice"
+    (is (delete-data '(($s foaf@name "Alice")
+                       ($s foaf@age $age))
+                     graph))
+    ;; Verify alice's age is gone
+    (is (not (ask '((alice foaf@age 30)) graph)))
+    ;; Verify bob's triples remain
+    (is (ask '((bob foaf@name "Bob")) graph))
+    (is (ask '((bob foaf@age 25)) graph))))
+
+(test delete-data-preserves-other-triples
+  "Test delete-data only removes matching triples"
+  (let ((graph (make-graph)))
+    (add-triples '((alice foaf@name "Alice")
+                   (alice foaf@age 30)
+                   (alice foaf@email "alice@example.com"))
+                 graph)
+    ;; Delete only age triple
+    (is (delete-data '((alice foaf@age 30)) graph))
+    ;; Verify age is gone but other triples remain
+    (is (not (ask '((alice foaf@age 30)) graph)))
+    (is (ask '((alice foaf@name "Alice")) graph))
+    (is (ask '((alice foaf@email "alice@example.com")) graph))))
+
+(test delete-data-calls-delete-hooks
+  "Test delete-data triggers delete hooks"
+  (let ((graph (make-graph))
+        (hook-called nil))
+    (add-triple '(alice foaf@name "Alice") graph)
+    (add-hook-to-graph graph 'delete-hooks
+                       (lambda (g op data)
+                         (declare (ignore g op data))
+                         (setf hook-called t)))
+    (delete-data '((alice foaf@name "Alice")) graph)
+    (is hook-called)))
+
+;;; ============================================================================
+;;; Phase 7: Additional query operations (SELECT, FILTER)
+;;; ============================================================================
+
+;; Tests for SELECT and FILTER will be added after discussion with user
+
+;;; ============================================================================
+;;; Phase 8-12: Additional test suites
 ;;; ============================================================================
 
 ;; Tests for remaining phases will be added as implementation progresses
