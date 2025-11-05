@@ -483,3 +483,55 @@ See also: TRIPLES, RAW-TRIPLES"
                               ((nil) (list element key value))      ; SPO
                               (:osp  (list key value element))      ; OSP
                               (:pos  (list value element key))))))  ; POS
+
+;;; -----------------------------------------------------------------------------
+;;; Bulk Triple Operations (with hooks)
+;;; -----------------------------------------------------------------------------
+
+(defun add-triples (triplist graph)
+  "Add multiple RDF triples to the graph at once.
+
+This is a bulk operation that adds multiple triples and then triggers all
+registered add-hooks. Unlike ADD-TRIPLE (which does NOT trigger hooks),
+ADD-TRIPLES is the primary way to add data when hooks need to be notified.
+
+Arguments:
+  TRIPLIST - List of triples, where each triple is (subject predicate object)
+  GRAPH    - A graph object (CLOS instance)
+
+Returns:
+  NIL (modifies graph in place)
+
+Side Effects:
+  - Calls ADD-TRIPLE for each triple in TRIPLIST
+  - Calls all registered add-hooks with (graph 'add-triples triplist)
+
+Hook Protocol:
+  Each hook function receives three arguments:
+    1. GRAPH     - The graph that was modified
+    2. OPERATION - The symbol 'add-triples
+    3. DATA      - The list of triples that were added
+
+Examples:
+  (add-triples '((John schema@name \"John Doe\")
+                 (John schema@age 30)
+                 (Jane schema@name \"Jane Doe\"))
+               g)
+
+  ;; With hook
+  (push (lambda (graph op data)
+          (format t \"Added ~A triples~%\" (length data)))
+        (graph-add-hooks g))
+  (add-triples '((John a schema@Person)) g)
+  ; Prints: \"Added 1 triples\"
+
+See also: ADD-TRIPLE, DELETE-TRIPLES, GRAPH-ADD-HOOKS"
+  ;; Add all triples
+  (mapc (lambda (triple) (add-triple triple graph)) triplist)
+
+  ;; Call all add-hooks
+  (mapc (lambda (hook)
+          (funcall hook graph 'add-triples triplist))
+        (graph-add-hooks graph))
+
+  nil)
