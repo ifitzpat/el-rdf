@@ -41,8 +41,7 @@ jobs:
         run: |
           curl -O https://beta.quicklisp.org/quicklisp.lisp
           ${{ matrix.lisp }} --non-interactive --load quicklisp.lisp \
-            --eval '(quicklisp-quickstart:install :path "~/quicklisp/")' \
-            --eval '(quit)'
+            --eval '(quicklisp-quickstart:install :path "~/quicklisp/")'
 
       - name: Load system and run tests
         run: |
