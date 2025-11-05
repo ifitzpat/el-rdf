@@ -308,3 +308,65 @@ See also: UPDATE-DUAL, DELETE-TRIPLE"
               (remove entry orig :test #'equal)))
         ;; Key not found - return original unchanged
         orig)))
+
+;;; -----------------------------------------------------------------------------
+;;; Triple Operations
+;;; -----------------------------------------------------------------------------
+
+(defun add-triple (triple graph)
+  "Add a single RDF triple to the graph, maintaining all three indices.
+
+This is the core function for adding data to the graph. It updates three hash
+table indices (SPO, OSP, POS) to enable efficient querying from different
+access patterns. The function automatically normalizes rdf@type to 'a for
+storage efficiency.
+
+Arguments:
+  TRIPLE - A list of three elements: (subject predicate object)
+  GRAPH  - A graph object (CLOS instance)
+
+Returns:
+  NIL (modifies graph in place)
+
+Side Effects:
+  - Updates graph-spo hash table (subject -> ((predicate . (objects...))))
+  - Updates graph-osp hash table (object -> ((subject . (predicates...))))
+  - Updates graph-pos hash table (predicate -> ((object . (subjects...))))
+
+Normalization:
+  - rdf@type is automatically converted to 'a during storage
+  - This saves space and simplifies queries
+
+Examples:
+  (add-triple '(John schema@name \"John Doe\") g)
+  (add-triple '(John a schema@Person) g)
+  (add-triple '(John rdf@type schema@Person) g)  ; Stored as 'a
+
+See also: ADD-TRIPLES, DELETE-TRIPLE, TRIPLES"
+  (let* ((subject (first triple))
+         ;; Normalize rdf@type to 'a for storage efficiency
+         (predicate (if (eq (second triple) 'rdf@type) 'a (second triple)))
+         (object (third triple))
+         (spo (graph-spo graph))
+         (osp (graph-osp graph))
+         (pos (graph-pos graph)))
+
+    ;; Update SPO index: subject -> ((predicate . (objects...)))
+    (let ((po (gethash subject spo)))
+      (if po
+          (setf (gethash subject spo) (update-dual predicate object po))
+          (setf (gethash subject spo) `((,predicate . ,(list object))))))
+
+    ;; Update OSP index: object -> ((subject . (predicates...)))
+    (let ((sp (gethash object osp)))
+      (if sp
+          (setf (gethash object osp) (update-dual subject predicate sp))
+          (setf (gethash object osp) `((,subject . ,(list predicate))))))
+
+    ;; Update POS index: predicate -> ((object . (subjects...)))
+    (let ((os (gethash predicate pos)))
+      (if os
+          (setf (gethash predicate pos) (update-dual object subject os))
+          (setf (gethash predicate pos) `((,object . ,(list subject)))))))
+
+  nil)
