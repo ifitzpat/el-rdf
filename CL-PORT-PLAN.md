@@ -886,12 +886,16 @@ git commit -m "Implement function-name with tests"
   - Fallback: 4 threads
   - Consider making configurable via special variable `*max-threads*`
 
+✅ **Phase 3: Hook System** (3/3 functions)
+- `add-hook-to-graph` - Add hook function to graph's hook list
+- `remove-hook-from-graph` - Remove hook function from graph's hook list
+- `get-graph-hooks` - Get all hooks of a specific type
+
 ### Current Phase
 
-🔄 **Phase 3: Hook System** (0/3 functions)
-- `add-hook-to-graph`
-- `remove-hook-from-graph`
-- `get-graph-hooks`
+🔄 **Phase 4: Triple Retrieval** (0/2 functions)
+- `triples` - Main query function
+- `raw-triples` - Query without resolving content references
 
 ## Next Steps
 
@@ -903,8 +907,9 @@ git commit -m "Implement function-name with tests"
 6. ✅ Create tests/test-package.lisp
 7. ✅ Create tests/cl-rdf-tests.lisp with test suites
 8. ✅ Complete Phase 1: Core utilities (5/5)
-9. ✅ Complete Phase 2: Triple Storage (7/7)
-10. 🔄 Begin Phase 3: Hook System
+9. ✅ Complete Phase 2: Triple Storage + Threading (7/7)
+10. ✅ Complete Phase 3: Hook System (3/3)
+11. 🔄 Begin Phase 4: Triple Retrieval
 
 ---
 
