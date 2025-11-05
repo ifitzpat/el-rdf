@@ -1584,3 +1584,146 @@ See also: WHERE (alias), ASK, SELECT, CONSTRUCT, FILTER"
 
 ;; Alias for compatibility
 (setf (fdefinition 'where) #'graph-query)
+
+;;;; ============================================================================
+;;;; Phase 7: Query Operations (ASK, CONSTRUCT, DELETE-DATA)
+;;;; ============================================================================
+
+;;; -----------------------------------------------------------------------------
+;;; Boolean Queries
+;;; -----------------------------------------------------------------------------
+
+(defun ask (clauses graph)
+  "Execute a boolean ASK query against GRAPH.
+
+Returns T if the pattern matches at least one result, NIL otherwise.
+Handles pattern-match-failure gracefully by returning NIL.
+
+Arguments:
+  CLAUSES - List of triple patterns (same as graph-query)
+  GRAPH - The RDF graph to query
+
+Returns:
+  T if pattern matches, NIL otherwise
+
+Examples:
+  (ask '(($s foaf@name \"Alice\")) graph)  => T or NIL
+  (ask '(($s rdf@type foaf@Person)) graph) => T or NIL
+
+Note: Unlike graph-query, ASK never signals errors. It returns NIL
+for both pattern-match-failure and empty results.
+
+See also: GRAPH-QUERY, SELECT"
+  (handler-case
+      (let ((result (graph-query clauses graph)))
+        ;; Result is :no-match or a binding list
+        (and result
+             (not (eq result :no-match))
+             (>= (length (remove nil result)) 1)))
+    (error () nil)))
+
+;;; -----------------------------------------------------------------------------
+;;; Triple Construction
+;;; -----------------------------------------------------------------------------
+
+(defun expand-list-bindings (triples)
+  "Expand triples containing list values into multiple triples.
+
+If a triple's object is a list, expands it into multiple triples,
+one for each list element.
+
+Arguments:
+  TRIPLES - List of triples (each triple is (subject predicate object))
+
+Returns:
+  List of expanded triples
+
+Examples:
+  (expand-list-bindings '((alice foaf@knows (bob charlie))))
+  => ((alice foaf@knows bob) (alice foaf@knows charlie))
+
+  (expand-list-bindings '((alice foaf@name \"Alice\")))
+  => ((alice foaf@name \"Alice\"))
+
+See also: CONSTRUCT"
+  (mapcan (lambda (triple)
+            (let ((subject (nth 0 triple))
+                  (predicate (nth 1 triple))
+                  (object (nth 2 triple)))
+              ;; Check if object is a list
+              (if (and (listp object) (not (null object)))
+                  ;; Expand list into multiple triples
+                  (mapcar (lambda (obj) (list subject predicate obj)) object)
+                ;; Single triple
+                (list triple))))
+          triples))
+
+(defun construct (clauses bindings)
+  "Construct new triples from CLAUSES template using BINDINGS.
+
+CLAUSES is a template (list of triple patterns with variables).
+BINDINGS is the result from graph-query (triple-nested structure).
+
+For each binding set, substitutes variables in the template and
+expands any list objects into multiple triples.
+
+Arguments:
+  CLAUSES - Template triples with variables (e.g., '(($s rdf@type foaf@Person)))
+  BINDINGS - Query results from graph-query
+
+Returns:
+  List of constructed triples
+
+Examples:
+  (let ((bindings (graph-query '(($s foaf@name $n)) graph)))
+    (construct '(($s rdf@type foaf@Person)) bindings))
+  => ((alice rdf@type foaf@Person) (bob rdf@type foaf@Person))
+
+See also: GRAPH-QUERY, DELETE-DATA, EXPAND-LIST-BINDINGS"
+  (mapcan (lambda (binding-set)
+            (mapcan (lambda (binding-branch)
+                      (expand-list-bindings (sublis binding-branch clauses)))
+                    binding-set))
+          bindings))
+
+;;; -----------------------------------------------------------------------------
+;;; Pattern-Based Deletion
+;;; -----------------------------------------------------------------------------
+
+(defun delete-data (clauses graph)
+  "Delete all triples matching CLAUSES pattern from GRAPH.
+
+Uses graph-query to find matches, construct to build triples to delete,
+then delete-triples to remove them. Handles errors gracefully.
+
+Arguments:
+  CLAUSES - List of triple patterns (may include variables)
+  GRAPH - The RDF graph to modify
+
+Returns:
+  T if deletion succeeded (at least one triple deleted)
+  NIL if no matches found or query failed
+
+Examples:
+  ;; Delete specific triple
+  (delete-data '((alice foaf@age 30)) graph)
+
+  ;; Delete all matching pattern
+  (delete-data '(($s rdf@type foaf@Person)) graph)
+
+  ;; Delete with join
+  (delete-data '(($s foaf@name \"Alice\")
+                 ($s foaf@age $age))
+               graph)
+
+Note: Triggers delete-hooks after deletion.
+
+See also: DELETE-TRIPLE, DELETE-TRIPLES, CONSTRUCT, GRAPH-QUERY"
+  (handler-case
+      (let* ((bindings (graph-query clauses graph))
+             (triples-to-delete (when (and bindings (not (eq bindings :no-match)))
+                                  (construct clauses bindings))))
+        (when triples-to-delete
+          (delete-triples triples-to-delete graph)
+          t))
+    (error () nil)))
