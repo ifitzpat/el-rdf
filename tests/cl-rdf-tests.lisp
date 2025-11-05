@@ -104,6 +104,22 @@
   ;; Symbol that's just $ should still be a variable
   (is (variablep '$)))
 
+(test var-or-wildp
+  "Test predicate for variables or wildcards"
+  ;; Wildcard (t) should return T
+  (is (var-or-wildp t))
+  ;; Variables should return T
+  (is (var-or-wildp '$subject))
+  (is (var-or-wildp '$name))
+  (is (var-or-wildp '$x))
+  ;; Regular symbols should return NIL
+  (is (not (var-or-wildp 'regular-symbol)))
+  (is (not (var-or-wildp 'schema.Person)))
+  ;; Other types should return NIL
+  (is (not (var-or-wildp "string")))
+  (is (not (var-or-wildp 42)))
+  (is (not (var-or-wildp nil))))
+
 ;;; ============================================================================
 ;;; Phase 2: Triple Storage
 ;;; ============================================================================
