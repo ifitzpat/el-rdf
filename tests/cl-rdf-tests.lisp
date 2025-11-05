@@ -208,6 +208,60 @@
     (is (member '(pred1 . obj1) (cdr (assoc 'subject1 result2)) :test #'equal))
     (is (member '(pred2 . obj2) (cdr (assoc 'subject1 result2)) :test #'equal))))
 
+(test remove-dual-single-value
+  "Test remove-dual removing the only value for a key"
+  ;; When removing the last value, the entire key should be removed
+  (let* ((initial '((key1 . (val1))))
+         (result (remove-dual 'key1 'val1 initial)))
+    ;; Entry should be completely removed
+    (is (null result))))
+
+(test remove-dual-multiple-values
+  "Test remove-dual with multiple values for a key"
+  ;; Remove one value, leaving others
+  (let* ((initial '((key1 . (val1 val2 val3))))
+         (result (remove-dual 'key1 'val2 initial)))
+    (is (equal 1 (length result)))
+    (is (equal 2 (length (cdr (assoc 'key1 result)))))
+    (is (member 'val1 (cdr (assoc 'key1 result))))
+    (is (member 'val3 (cdr (assoc 'key1 result))))
+    (is (not (member 'val2 (cdr (assoc 'key1 result)))))))
+
+(test remove-dual-nonexistent-key
+  "Test remove-dual with a key that doesn't exist"
+  ;; Should return original alist unchanged
+  (let* ((initial '((key1 . (val1 val2))))
+         (result (remove-dual 'key2 'val1 initial)))
+    (is (equal initial result))))
+
+(test remove-dual-nonexistent-value
+  "Test remove-dual with a value that doesn't exist"
+  ;; Should return original alist unchanged
+  (let* ((initial '((key1 . (val1 val2))))
+         (result (remove-dual 'key1 'val3 initial)))
+    (is (equal initial result))))
+
+(test remove-dual-complex-values
+  "Test remove-dual with complex values (cons pairs)"
+  ;; Used for triple indices with (predicate . object) pairs
+  (let* ((initial '((subject1 . ((pred1 . obj1) (pred2 . obj2)))))
+         (result (remove-dual 'subject1 '(pred1 . obj1) initial)))
+    (is (equal 1 (length result)))
+    (is (equal 1 (length (cdr (assoc 'subject1 result)))))
+    (is (member '(pred2 . obj2) (cdr (assoc 'subject1 result)) :test #'equal))
+    (is (not (member '(pred1 . obj1) (cdr (assoc 'subject1 result)) :test #'equal)))))
+
+(test remove-dual-multiple-keys
+  "Test remove-dual with multiple keys in alist"
+  ;; Should only affect the specified key
+  (let* ((initial '((key1 . (val1 val2)) (key2 . (val3 val4))))
+         (result (remove-dual 'key1 'val1 initial)))
+    (is (equal 2 (length result)))
+    ;; key1 should have val2 only
+    (is (equal '(val2) (cdr (assoc 'key1 result))))
+    ;; key2 should be unchanged
+    (is (equal '(val3 val4) (cdr (assoc 'key2 result))))))
+
 ;;; ============================================================================
 ;;; Phase 3: Hook System
 ;;; ============================================================================
