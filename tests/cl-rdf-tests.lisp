@@ -463,6 +463,76 @@
       (is (member '(subj pred1 obj1) result :test #'equal))
       (is (member '(subj pred1 obj2) result :test #'equal)))))
 
+;; Tests for add-triples
+
+(test add-triples-basic
+  "Test adding multiple triples at once"
+  (let ((g (make-graph)))
+    (add-triples '((John schema@name "John Doe")
+                   (John schema@age 30)
+                   (Jane schema@name "Jane Doe"))
+                 g)
+    ;; All triples should be added
+    (is (not (null (gethash 'John (graph-spo g)))))
+    (is (not (null (gethash 'Jane (graph-spo g)))))
+    (let ((john-entry (gethash 'John (graph-spo g))))
+      (is (member "John Doe" (cdr (assoc 'schema@name john-entry)) :test #'equal))
+      (is (member 30 (cdr (assoc 'schema@age john-entry)))))))
+
+(test add-triples-empty-list
+  "Test add-triples with empty list"
+  (let ((g (make-graph)))
+    ;; Should not error
+    (add-triples nil g)
+    ;; Graph should remain empty
+    (is (= 0 (hash-table-count (graph-spo g))))))
+
+(test add-triples-calls-hooks
+  "Test that add-triples calls add-hooks"
+  (let ((g (make-graph))
+        (hook-called nil)
+        (hook-operation nil)
+        (hook-data nil))
+    ;; Add a hook
+    (push (lambda (graph operation data)
+            (setf hook-called t)
+            (setf hook-operation operation)
+            (setf hook-data data))
+          (graph-add-hooks g))
+    ;; Add triples
+    (add-triples '((John schema@name "John")) g)
+    ;; Hook should have been called
+    (is (eq t hook-called))
+    (is (eq 'add-triples hook-operation))
+    (is (equal '((John schema@name "John")) hook-data))))
+
+(test add-triples-multiple-hooks
+  "Test that all add-hooks are called"
+  (let ((g (make-graph))
+        (hook1-called nil)
+        (hook2-called nil))
+    ;; Add two hooks
+    (push (lambda (graph operation data)
+            (declare (ignore graph operation data))
+            (setf hook1-called t))
+          (graph-add-hooks g))
+    (push (lambda (graph operation data)
+            (declare (ignore graph operation data))
+            (setf hook2-called t))
+          (graph-add-hooks g))
+    ;; Add triples
+    (add-triples '((John schema@name "John")) g)
+    ;; Both hooks should be called
+    (is (eq t hook1-called))
+    (is (eq t hook2-called))))
+
+(test add-triples-no-hooks
+  "Test add-triples works with no hooks registered"
+  (let ((g (make-graph)))
+    ;; Should not error when no hooks present
+    (add-triples '((John schema@name "John")) g)
+    (is (not (null (gethash 'John (graph-spo g)))))))
+
 ;;; ============================================================================
 ;;; Phase 3: Hook System
 ;;; ============================================================================
