@@ -19,24 +19,17 @@
 ;;;; ============================================================================
 
 ;;; -----------------------------------------------------------------------------
-;;; Graph Structure (CLOS-based)
+;;; Graph Structure (CLOS-based with Generic Function Support)
 ;;; -----------------------------------------------------------------------------
 
+;;; Abstract Base Class
+
 (defclass graph ()
-  ((spo
-    :initform (make-hash-table :test 'eq)
-    :accessor graph-spo
-    :documentation "Subject-Predicate-Object index: subject -> ((predicate . (obj1 obj2 ...)))")
-
-   (osp
-    :initform (make-hash-table :test 'equal)
-    :accessor graph-osp
-    :documentation "Object-Subject-Predicate index: object -> ((subject . (pred1 pred2 ...)))")
-
-   (pos
-    :initform (make-hash-table :test 'eq)
-    :accessor graph-pos
-    :documentation "Predicate-Object-Subject index: predicate -> ((object . (subj1 subj2 ...)))")
+  ((name
+    :initarg :name
+    :initform nil
+    :accessor graph-name
+    :documentation "Optional name for graph identification and checkpointing")
 
    (add-hooks
     :initform nil
@@ -56,31 +49,58 @@
    (prefixes
     :initform nil
     :accessor graph-prefixes
-    :documentation "Association list of (prefix-string . namespace-uri) pairs for TTL import")
+    :documentation "Association list of (prefix-string . namespace-uri) pairs for TTL import"))
+  (:documentation "Abstract base class for all graph types.
 
-   (name
-    :initarg :name
-    :initform nil
-    :accessor graph-name
-    :documentation "Optional name for checkpointing and identification")
+This class defines the common interface and shared state for all graph
+implementations. Concrete graph types inherit from this class and implement
+the generic CRUD operations.
+
+Subclasses:
+  - LOCAL-GRAPH: In-memory triple-indexed storage
+  - (Future) HTTP-GRAPH: Remote graph via HTTP/REST API
+  - (Future) WEBSOCKET-GRAPH: Remote graph via WebSocket
+  - (Future) REPL-GRAPH: Remote graph via REPL connection
+
+See REMOTE-GRAPHS.md for architecture details."))
+
+;;; Local In-Memory Graph
+
+(defclass local-graph (graph)
+  ((spo
+    :initform (make-hash-table :test 'eq)
+    :accessor graph-spo
+    :documentation "Subject-Predicate-Object index: subject -> ((predicate . (obj1 obj2 ...)))")
+
+   (osp
+    :initform (make-hash-table :test 'equal)
+    :accessor graph-osp
+    :documentation "Object-Subject-Predicate index: object -> ((subject . (pred1 pred2 ...)))")
+
+   (pos
+    :initform (make-hash-table :test 'eq)
+    :accessor graph-pos
+    :documentation "Predicate-Object-Subject index: predicate -> ((object . (subj1 subj2 ...)))")
 
    (lock
     :initform (make-lock "graph-lock")
     :reader graph-lock
     :documentation "Mutex for thread-safe operations on graph indices"))
-  (:documentation "RDF graph with triple-indexed storage (SPO, OSP, POS).
+  (:documentation "Local in-memory RDF graph with triple-indexed storage.
 
-The graph uses three hash table indices for efficient querying:
+The local-graph uses three hash table indices for efficient querying:
 - SPO: Indexed by subject (uses EQ test for symbol keys)
 - OSP: Indexed by object (uses EQUAL test for any type of keys)
 - POS: Indexed by predicate (uses EQ test for symbol keys)
 
-Hooks allow observing CRUD operations.
-Prefixes store namespace mappings for TTL import.
-Name enables checkpointing and recovery of named graphs."))
+Supports parallel processing for bulk operations (100+ items threshold).
+Thread-safe via per-graph mutex."))
 
 (defun make-graph (&key name)
-  "Create a new RDF graph with optional NAME for checkpointing.
+  "Create a new local in-memory RDF graph with optional NAME.
+
+Creates a LOCAL-GRAPH instance with triple-indexed storage. This is the
+standard way to create a graph for local in-memory use.
 
 A graph is implemented as a CLOS object with three hash table indices
 for efficient triple storage and retrieval. Each index provides fast
@@ -96,14 +116,17 @@ Arguments:
          REGISTER-GRAPH-FOR-CHECKPOINTING.
 
 Returns:
-  A new GRAPH object.
+  A new LOCAL-GRAPH object.
 
 Examples:
-  (make-graph)                    ; Anonymous graph
-  (make-graph :name \"my-data\")    ; Named graph for checkpointing
+  (make-graph)                    ; Anonymous local graph
+  (make-graph :name \"my-data\")    ; Named local graph for checkpointing
 
-See also: ADD-TRIPLE, GRAPH-QUERY, REGISTER-GRAPH-FOR-CHECKPOINTING"
-  (make-instance 'graph :name name))
+Note: For remote graphs, directly instantiate the appropriate class:
+  (make-instance 'http-graph :endpoint \"https://...\")
+
+See also: LOCAL-GRAPH, ADD-TRIPLE, GRAPH-QUERY, REGISTER-GRAPH-FOR-CHECKPOINTING"
+  (make-instance 'local-graph :name name))
 
 ;;; -----------------------------------------------------------------------------
 ;;; Basic Predicates
@@ -315,23 +338,37 @@ See also: UPDATE-DUAL, DELETE-TRIPLE"
         orig)))
 
 ;;; -----------------------------------------------------------------------------
-;;; Triple Operations
+;;; Triple Operations (Generic Functions)
 ;;; -----------------------------------------------------------------------------
 
-(defun add-triple (triple graph)
-  "Add a single RDF triple to the graph, maintaining all three indices.
+(defgeneric add-triple (triple graph)
+  (:documentation "Add a single RDF triple to GRAPH.
 
-This is the core function for adding data to the graph. It updates three hash
-table indices (SPO, OSP, POS) to enable efficient querying from different
-access patterns. The function automatically normalizes rdf@type to 'a for
-storage efficiency.
+This is the core function for adding data to the graph. Behavior depends on
+the graph type:
+  - LOCAL-GRAPH: Updates three hash table indices (SPO, OSP, POS)
+  - HTTP-GRAPH: Sends triple to remote HTTP endpoint
+  - WEBSOCKET-GRAPH: Sends triple over WebSocket connection
 
 Arguments:
   TRIPLE - A list of three elements: (subject predicate object)
-  GRAPH  - A graph object (CLOS instance)
+  GRAPH  - A graph object
 
 Returns:
-  NIL (modifies graph in place)
+  NIL
+
+Examples:
+  (add-triple '(John schema@name \"John Doe\") g)
+  (add-triple '(John a schema@Person) g)
+
+See also: ADD-TRIPLES, DELETE-TRIPLE"))
+
+(defmethod add-triple (triple (graph local-graph))
+  "Add a single RDF triple to a local in-memory graph.
+
+Updates three hash table indices (SPO, OSP, POS) to enable efficient querying
+from different access patterns. The function automatically normalizes rdf@type
+to 'a for storage efficiency. Thread-safe via per-graph mutex.
 
 Side Effects:
   - Updates graph-spo hash table (subject -> ((predicate . (objects...))))
@@ -339,15 +376,7 @@ Side Effects:
   - Updates graph-pos hash table (predicate -> ((object . (subjects...))))
 
 Normalization:
-  - rdf@type is automatically converted to 'a during storage
-  - This saves space and simplifies queries
-
-Examples:
-  (add-triple '(John schema@name \"John Doe\") g)
-  (add-triple '(John a schema@Person) g)
-  (add-triple '(John rdf@type schema@Person) g)  ; Stored as 'a
-
-See also: ADD-TRIPLES, DELETE-TRIPLE, TRIPLES"
+  - rdf@type is automatically converted to 'a during storage"
   (let* ((subject (first triple))
          ;; Normalize rdf@type to 'a for storage efficiency
          (predicate (if (eq (second triple) 'rdf@type) 'a (second triple)))
@@ -378,19 +407,32 @@ See also: ADD-TRIPLES, DELETE-TRIPLE, TRIPLES"
 
   nil)
 
-(defun delete-triple (triple graph)
-  "Remove a single RDF triple from the graph, maintaining all three indices.
+(defgeneric delete-triple (triple graph)
+  (:documentation "Remove a single RDF triple from GRAPH.
 
-This function is the inverse of ADD-TRIPLE. It removes a triple from all three
-indices (SPO, OSP, POS) and automatically cleans up empty entries using REMHASH
-when no triples remain for a given key.
+Behavior depends on graph type:
+  - LOCAL-GRAPH: Removes from hash table indices with cleanup
+  - HTTP-GRAPH: Sends DELETE request to remote endpoint
+  - WEBSOCKET-GRAPH: Sends delete message over WebSocket
 
 Arguments:
   TRIPLE - A list of three elements: (subject predicate object)
-  GRAPH  - A graph object (CLOS instance)
+  GRAPH  - A graph object
 
 Returns:
-  NIL (modifies graph in place)
+  NIL
+
+Examples:
+  (delete-triple '(John schema@name \"John Doe\") g)
+
+See also: DELETE-TRIPLES, ADD-TRIPLE"))
+
+(defmethod delete-triple (triple (graph local-graph))
+  "Remove a single RDF triple from a local in-memory graph.
+
+This is the inverse of ADD-TRIPLE. It removes a triple from all three indices
+(SPO, OSP, POS) and automatically cleans up empty entries using REMHASH when
+no triples remain for a given key. Thread-safe via per-graph mutex.
 
 Side Effects:
   - Updates graph-spo hash table (removes or updates entry)
@@ -399,14 +441,7 @@ Side Effects:
   - Uses REMHASH to completely remove keys when they become empty
 
 Normalization:
-  - rdf@type is automatically converted to 'a for lookup
-  - This matches the normalization done in ADD-TRIPLE
-
-Examples:
-  (delete-triple '(John schema@name \"John Doe\") g)
-  (delete-triple '(John rdf@type schema@Person) g)  ; Looks up as 'a
-
-See also: ADD-TRIPLE, DELETE-TRIPLES, TRIPLES"
+  - rdf@type is automatically converted to 'a for lookup"
   (let* ((subject (first triple))
          ;; Normalize rdf@type to 'a to match storage format
          (predicate (if (eq (second triple) 'rdf@type) 'a (second triple)))
@@ -530,48 +565,46 @@ See also: TRIPLES, RAW-TRIPLES"
 ;;; Bulk Triple Operations (with hooks)
 ;;; -----------------------------------------------------------------------------
 
-(defun add-triples (triplist graph)
-  "Add multiple RDF triples to the graph at once.
+(defgeneric add-triples (triplist graph)
+  (:documentation "Add multiple RDF triples to GRAPH at once.
 
-This is a bulk operation that adds multiple triples and then triggers all
-registered add-hooks. Unlike ADD-TRIPLE (which does NOT trigger hooks),
-ADD-TRIPLES is the primary way to add data when hooks need to be notified.
-
-For large datasets (100+ triples), this function uses parallel processing
-across multiple threads to improve performance. Each ADD-TRIPLE call is
-thread-safe via the graph's mutex.
+This is a bulk operation that triggers add-hooks after completion. Behavior
+depends on graph type:
+  - LOCAL-GRAPH: Parallel processing for 100+ triples, calls add-hooks
+  - HTTP-GRAPH: Batch POST request to remote endpoint
+  - WEBSOCKET-GRAPH: Batch send over WebSocket
 
 Arguments:
   TRIPLIST - List of triples, where each triple is (subject predicate object)
-  GRAPH    - A graph object (CLOS instance)
+  GRAPH    - A graph object
 
 Returns:
-  NIL (modifies graph in place)
-
-Side Effects:
-  - Calls ADD-TRIPLE for each triple in TRIPLIST (in parallel for large datasets)
-  - Calls all registered add-hooks with (graph 'add-triples triplist)
+  NIL
 
 Hook Protocol:
-  Each hook function receives three arguments:
-    1. GRAPH     - The graph that was modified
-    2. OPERATION - The symbol 'add-triples
-    3. DATA      - The list of triples that were added
+  Each hook function receives (graph 'add-triples triplist)
 
 Examples:
   (add-triples '((John schema@name \"John Doe\")
-                 (John schema@age 30)
-                 (Jane schema@name \"Jane Doe\"))
+                 (John schema@age 30))
                g)
 
-  ;; With hook
-  (push (lambda (graph op data)
-          (format t \"Added ~A triples~%\" (length data)))
-        (graph-add-hooks g))
-  (add-triples '((John a schema@Person)) g)
-  ; Prints: \"Added 1 triples\"
+See also: ADD-TRIPLE, DELETE-TRIPLES"))
 
-See also: ADD-TRIPLE, DELETE-TRIPLES, GRAPH-ADD-HOOKS"
+(defmethod add-triples (triplist (graph local-graph))
+  "Add multiple RDF triples to a local in-memory graph.
+
+Bulk operation that adds multiple triples and then triggers all registered
+add-hooks. Unlike ADD-TRIPLE (which does NOT trigger hooks), ADD-TRIPLES is
+the primary way to add data when hooks need to be notified.
+
+For large datasets (100+ triples), uses parallel processing across multiple
+threads to improve performance. Each ADD-TRIPLE call is thread-safe via the
+graph's mutex.
+
+Side Effects:
+  - Calls ADD-TRIPLE for each triple (in parallel for 100+ triples)
+  - Calls all registered add-hooks with (graph 'add-triples triplist)"
   ;; Add all triples (with threading for large datasets)
   (if (< (length triplist) 100)
       ;; Small dataset - sequential processing
@@ -601,48 +634,46 @@ See also: ADD-TRIPLE, DELETE-TRIPLES, GRAPH-ADD-HOOKS"
 
   nil)
 
-(defun delete-triples (triplist graph)
-  "Delete multiple RDF triples from the graph at once.
+(defgeneric delete-triples (triplist graph)
+  (:documentation "Delete multiple RDF triples from GRAPH at once.
 
-This is a bulk operation that deletes multiple triples and then triggers all
-registered delete-hooks. Unlike DELETE-TRIPLE (which does NOT trigger hooks),
-DELETE-TRIPLES is the primary way to remove data when hooks need to be notified.
-
-For large datasets (100+ triples), this function uses parallel processing
-across multiple threads to improve performance. Each DELETE-TRIPLE call is
-thread-safe via the graph's mutex.
+This is a bulk operation that triggers delete-hooks after completion. Behavior
+depends on graph type:
+  - LOCAL-GRAPH: Parallel processing for 100+ triples, calls delete-hooks
+  - HTTP-GRAPH: Batch DELETE request to remote endpoint
+  - WEBSOCKET-GRAPH: Batch delete over WebSocket
 
 Arguments:
   TRIPLIST - List of triples, where each triple is (subject predicate object)
-  GRAPH    - A graph object (CLOS instance)
+  GRAPH    - A graph object
 
 Returns:
-  NIL (modifies graph in place)
-
-Side Effects:
-  - Calls DELETE-TRIPLE for each triple in TRIPLIST (in parallel for large datasets)
-  - Calls all registered delete-hooks with (graph 'delete-triples triplist)
+  NIL
 
 Hook Protocol:
-  Each hook function receives three arguments:
-    1. GRAPH     - The graph that was modified
-    2. OPERATION - The symbol 'delete-triples
-    3. DATA      - The list of triples that were deleted
+  Each hook function receives (graph 'delete-triples triplist)
 
 Examples:
   (delete-triples '((John schema@name \"John Doe\")
-                    (John schema@age 30)
-                    (Jane schema@name \"Jane Doe\"))
+                    (John schema@age 30))
                   g)
 
-  ;; With hook
-  (push (lambda (graph op data)
-          (format t \"Deleted ~A triples~%\" (length data)))
-        (graph-delete-hooks g))
-  (delete-triples '((John a schema@Person)) g)
-  ; Prints: \"Deleted 1 triples\"
+See also: DELETE-TRIPLE, ADD-TRIPLES"))
 
-See also: DELETE-TRIPLE, ADD-TRIPLES, GRAPH-DELETE-HOOKS"
+(defmethod delete-triples (triplist (graph local-graph))
+  "Delete multiple RDF triples from a local in-memory graph.
+
+Bulk operation that deletes multiple triples and then triggers all registered
+delete-hooks. Unlike DELETE-TRIPLE (which does NOT trigger hooks), DELETE-TRIPLES
+is the primary way to remove data when hooks need to be notified.
+
+For large datasets (100+ triples), uses parallel processing across multiple
+threads to improve performance. Each DELETE-TRIPLE call is thread-safe via the
+graph's mutex.
+
+Side Effects:
+  - Calls DELETE-TRIPLE for each triple (in parallel for 100+ triples)
+  - Calls all registered delete-hooks with (graph 'delete-triples triplist)"
   ;; Delete all triples (with threading for large datasets)
   (if (< (length triplist) 100)
       ;; Small dataset - sequential processing
@@ -676,17 +707,33 @@ See also: DELETE-TRIPLE, ADD-TRIPLES, GRAPH-DELETE-HOOKS"
 ;;;; Phase 3: Hook System
 ;;; ============================================================================
 
-(defun add-hook-to-graph (graph hook-type hook-function)
+(defgeneric add-hook-to-graph (graph hook-type hook-function)
+  (:documentation "Add HOOK-FUNCTION to GRAPH's hooks of HOOK-TYPE.
+
+Works on all graph types (local and remote) since hooks are stored in the
+abstract GRAPH base class.
+
+Arguments:
+  GRAPH         - A graph object
+  HOOK-TYPE     - Type of hook: :add, :delete, or :query
+  HOOK-FUNCTION - A function taking (graph operation data) as arguments
+
+Returns:
+  NIL
+
+Examples:
+  (add-hook-to-graph g :add
+    (lambda (graph op data)
+      (format t \"Added ~A triples~%\" (length data))))
+
+See also: REMOVE-HOOK-FROM-GRAPH, GET-GRAPH-HOOKS"))
+
+(defmethod add-hook-to-graph ((graph graph) hook-type hook-function)
   "Add HOOK-FUNCTION to GRAPH's hooks of HOOK-TYPE.
 
 Hooks are callback functions that are triggered when certain operations occur
 on the graph. This function adds a hook to the appropriate hook list, avoiding
 duplicates.
-
-Arguments:
-  GRAPH         - A graph object (CLOS instance)
-  HOOK-TYPE     - Type of hook: :add, :delete, or :query
-  HOOK-FUNCTION - A function taking (graph operation data) as arguments
 
 Hook Types:
   :add    - Called after ADD-TRIPLES operations
@@ -696,27 +743,8 @@ Hook Types:
 Hook Function Signature:
   (lambda (graph operation data) ...)
 
-  Where:
-    GRAPH     - The graph being operated on
-    OPERATION - Symbol indicating the operation (e.g., 'add-triples)
-    DATA      - Operation-specific data (e.g., list of triples)
-
-Returns:
-  NIL
-
 Side Effects:
-  Modifies the graph's hook list for the specified type
-
-Examples:
-  ;; Add a logging hook
-  (add-hook-to-graph g :add
-    (lambda (graph op data)
-      (format t \"Added ~A triples~%\" (length data))))
-
-  ;; Add a checkpoint hook
-  (add-hook-to-graph g :add #'my-checkpoint-function)
-
-See also: REMOVE-HOOK-FROM-GRAPH, GET-GRAPH-HOOKS, ADD-TRIPLES, DELETE-TRIPLES"
+  Modifies the graph's hook list for the specified type"
   (let ((hooks (ecase hook-type
                  (:add (graph-add-hooks graph))
                  (:delete (graph-delete-hooks graph))
@@ -732,32 +760,30 @@ See also: REMOVE-HOOK-FROM-GRAPH, GET-GRAPH-HOOKS, ADD-TRIPLES, DELETE-TRIPLES"
                       (cons hook-function (graph-query-hooks graph)))))))
   nil)
 
-(defun remove-hook-from-graph (graph hook-type hook-function)
-  "Remove HOOK-FUNCTION from GRAPH's hooks of HOOK-TYPE.
+(defgeneric remove-hook-from-graph (graph hook-type hook-function)
+  (:documentation "Remove HOOK-FUNCTION from GRAPH's hooks of HOOK-TYPE.
 
-This is the inverse of ADD-HOOK-TO-GRAPH. It removes a specific hook function
-from the graph's hook list. If the hook is not present, this is a no-op (does
-not signal an error).
+Works on all graph types. Safe to call even if hook doesn't exist.
 
 Arguments:
-  GRAPH         - A graph object (CLOS instance)
+  GRAPH         - A graph object
   HOOK-TYPE     - Type of hook: :add, :delete, or :query
   HOOK-FUNCTION - The function to remove
 
 Returns:
   NIL
 
+See also: ADD-HOOK-TO-GRAPH, GET-GRAPH-HOOKS"))
+
+(defmethod remove-hook-from-graph ((graph graph) hook-type hook-function)
+  "Remove HOOK-FUNCTION from GRAPH's hooks of HOOK-TYPE.
+
+This is the inverse of ADD-HOOK-TO-GRAPH. It removes a specific hook function
+from the graph's hook list. If the hook is not present, this is a no-op (does
+not signal an error).
+
 Side Effects:
-  Modifies the graph's hook list for the specified type
-
-Examples:
-  ;; Remove a specific hook
-  (remove-hook-from-graph g :add my-hook-fn)
-
-  ;; Safe to call even if hook doesn't exist
-  (remove-hook-from-graph g :add nonexistent-hook)
-
-See also: ADD-HOOK-TO-GRAPH, GET-GRAPH-HOOKS"
+  Modifies the graph's hook list for the specified type"
   (ecase hook-type
     (:add (setf (graph-add-hooks graph)
                 (remove hook-function (graph-add-hooks graph))))
@@ -767,28 +793,25 @@ See also: ADD-HOOK-TO-GRAPH, GET-GRAPH-HOOKS"
                   (remove hook-function (graph-query-hooks graph)))))
   nil)
 
-(defun get-graph-hooks (graph hook-type)
-  "Get all hooks of HOOK-TYPE from GRAPH.
+(defgeneric get-graph-hooks (graph hook-type)
+  (:documentation "Get all hooks of HOOK-TYPE from GRAPH.
 
-Returns the list of hook functions registered for the specified hook type.
-The returned list can be empty if no hooks are registered.
+Works on all graph types.
 
 Arguments:
-  GRAPH     - A graph object (CLOS instance)
+  GRAPH     - A graph object
   HOOK-TYPE - Type of hook: :add, :delete, or :query
 
 Returns:
   List of hook functions (may be NIL if no hooks registered)
 
-Examples:
-  ;; Get all add-hooks
-  (get-graph-hooks g :add)
+See also: ADD-HOOK-TO-GRAPH, REMOVE-HOOK-FROM-GRAPH"))
 
-  ;; Check if any delete-hooks are registered
-  (when (get-graph-hooks g :delete)
-    (format t \"Graph has delete hooks~%\"))
+(defmethod get-graph-hooks ((graph graph) hook-type)
+  "Get all hooks of HOOK-TYPE from GRAPH.
 
-See also: ADD-HOOK-TO-GRAPH, REMOVE-HOOK-FROM-GRAPH"
+Returns the list of hook functions registered for the specified hook type.
+The returned list can be empty if no hooks are registered."
   (ecase hook-type
     (:add (graph-add-hooks graph))
     (:delete (graph-delete-hooks graph))

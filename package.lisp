@@ -9,12 +9,18 @@
                 #:join-thread)
   (:documentation "In-memory RDF triple store for Common Lisp")
 
-  ;; Core graph operations
-  (:export #:make-graph
+  ;; Core graph classes and operations
+  (:export #:graph              ; Abstract base class
+           #:local-graph        ; Local in-memory graph
+           #:make-graph
            #:graph-name
            #:graph-spo
            #:graph-osp
-           #:graph-pos)
+           #:graph-pos
+           #:graph-add-hooks
+           #:graph-delete-hooks
+           #:graph-query-hooks
+           #:graph-prefixes)
 
   ;; Triple operations
   (:export #:add-triple
