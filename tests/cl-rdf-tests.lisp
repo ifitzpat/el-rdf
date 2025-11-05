@@ -634,7 +634,54 @@
 
 (in-suite :hooks)
 
-;; Hook tests will be added here
+;; Tests for add-hook-to-graph
+
+(test add-hook-to-graph-basic
+  "Test adding a hook to a graph"
+  (let ((g (make-graph))
+        (hook-fn (lambda (graph op data)
+                   (declare (ignore graph op data))
+                   nil)))
+    ;; Add hook to add-hooks
+    (add-hook-to-graph g :add hook-fn)
+    (is (member hook-fn (graph-add-hooks g)))
+
+    ;; Add hook to delete-hooks
+    (add-hook-to-graph g :delete hook-fn)
+    (is (member hook-fn (graph-delete-hooks g)))
+
+    ;; Add hook to query-hooks
+    (add-hook-to-graph g :query hook-fn)
+    (is (member hook-fn (graph-query-hooks g)))))
+
+(test add-hook-to-graph-no-duplicates
+  "Test that adding same hook twice doesn't create duplicates"
+  (let ((g (make-graph))
+        (hook-fn (lambda (graph op data)
+                   (declare (ignore graph op data))
+                   nil)))
+    ;; Add hook twice
+    (add-hook-to-graph g :add hook-fn)
+    (add-hook-to-graph g :add hook-fn)
+    ;; Should only appear once
+    (is (= 1 (count hook-fn (graph-add-hooks g))))))
+
+(test add-hook-to-graph-multiple-hooks
+  "Test adding multiple different hooks"
+  (let ((g (make-graph))
+        (hook1 (lambda (graph op data)
+                 (declare (ignore graph op data))
+                 1))
+        (hook2 (lambda (graph op data)
+                 (declare (ignore graph op data))
+                 2)))
+    ;; Add two different hooks
+    (add-hook-to-graph g :add hook1)
+    (add-hook-to-graph g :add hook2)
+    ;; Both should be present
+    (is (member hook1 (graph-add-hooks g)))
+    (is (member hook2 (graph-add-hooks g)))
+    (is (= 2 (length (graph-add-hooks g))))))
 
 ;;; ============================================================================
 ;;; Phase 4-12: Additional test suites
