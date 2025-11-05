@@ -6,8 +6,7 @@
                 #:make-lock
                 #:with-lock-held
                 #:make-thread
-                #:join-thread
-                #:cpu-count)
+                #:join-thread)
   (:documentation "In-memory RDF triple store for Common Lisp")
 
   ;; Core graph operations
