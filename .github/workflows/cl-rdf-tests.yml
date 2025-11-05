@@ -1,0 +1,98 @@
+name: CL-RDF Tests
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'cl-rdf.lisp'
+      - 'package.lisp'
+      - 'cl-rdf.asd'
+      - 'tests/**'
+      - '.github/workflows/cl-rdf-tests.yml'
+  pull_request:
+    paths:
+      - 'cl-rdf.lisp'
+      - 'package.lisp'
+      - 'cl-rdf.asd'
+      - 'tests/**'
+      - '.github/workflows/cl-rdf-tests.yml'
+
+jobs:
+  test:
+    name: Test on ${{ matrix.lisp }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lisp:
+          - sbcl-bin
+          - ecl
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Common Lisp (${{ matrix.lisp }})
+        uses: 40ants/setup-lisp@v4
+        with:
+          asdf-system: cl-rdf
+          qlfile-template: |
+            github fiveam fiveam
+            github sharplispers ironclad
+            github sionescu alexandria
+
+      - name: Install dependencies
+        run: |
+          ros run --eval '(ql:quickload :cl-rdf/tests)' --quit || true
+
+      - name: Run tests with output
+        run: |
+          ros run --eval '
+          (progn
+            (format t "~%~%========================================~%")
+            (format t "Loading cl-rdf test system...~%")
+            (format t "========================================~%~%")
+            (handler-case
+                (progn
+                  (ql:quickload :cl-rdf/tests :silent t)
+                  (format t "~%~%========================================~%")
+                  (format t "Running cl-rdf test suite with FiveAM...~%")
+                  (format t "========================================~%~%")
+                  (let ((result (fiveam:run! :cl-rdf)))
+                    (fresh-line)
+                    (if (fiveam:results-status result)
+                        (progn
+                          (format t "~%~%✓ All tests passed!~%~%")
+                          (uiop:quit 0))
+                        (progn
+                          (format t "~%~%✗ Some tests failed!~%~%")
+                          (uiop:quit 1)))))
+              (error (e)
+                (format t "~%~%ERROR: ~A~%~%" e)
+                (uiop:quit 2))))
+          ' --quit
+
+      - name: Test summary
+        if: always()
+        run: |
+          if [ $? -eq 0 ]; then
+            echo "✓ Tests passed on ${{ matrix.lisp }}"
+          else
+            echo "✗ Tests failed on ${{ matrix.lisp }}"
+            exit 1
+          fi
+
+  # Job that checks all implementations passed
+  all-tests-passed:
+    name: All implementations tested
+    runs-on: ubuntu-latest
+    needs: test
+    if: always()
+    steps:
+      - name: Check test results
+        run: |
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "Tests failed on one or more Common Lisp implementations"
+            exit 1
+          fi
+          echo "✓ All tests passed on all implementations"
