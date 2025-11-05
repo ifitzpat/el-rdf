@@ -144,6 +144,22 @@
       ;; All should be unique
       (is (= (length nodes) (length (remove-duplicates nodes)))))))
 
+(test namespace
+  "Test namespace extraction from symbols"
+  ;; Symbols with namespace.resource format
+  (is (string= "schema" (namespace '|schema.Person|)))
+  (is (string= "foaf" (namespace '|foaf.name|)))
+  (is (string= "rdf" (namespace '|rdf.type|)))
+  ;; Symbols without namespace (no period)
+  (is (null (namespace 'Person)))
+  (is (null (namespace 'name)))
+  (is (null (namespace 'a)))
+  ;; Blank nodes should return nil (they start with _.)
+  (is (null (namespace '|_.G1234|)))
+  ;; Variables should return nil (they start with $)
+  (is (null (namespace '$subject)))
+  (is (null (namespace '$name))))
+
 ;;; ============================================================================
 ;;; Phase 2: Triple Storage
 ;;; ============================================================================
