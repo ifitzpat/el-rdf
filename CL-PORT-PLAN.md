@@ -23,14 +23,16 @@ This document outlines the plan for porting `el-rdf.el` to Common Lisp as `cl-rd
 4. Use `|` as separator (e.g., `namespace|resource`) - **doesn't work, needs outer bars**
 5. Implement a custom reader macro
 
-**Chosen Solution**: Use **forward slash separator** for RDF resources: `namespace/resource`
+**Chosen Solution**: Use **period separator** for RDF resources: `namespace.resource`
 - ✅ Clean syntax, no escaping needed
 - ✅ Valid CL symbol without special reader syntax
-- ✅ Visually distinct separator
-- ✅ Maps well to URI/RDF conventions
+- ✅ Natural "namespace.member" semantics
+- ✅ Familiar from other languages (Java, Python, JS)
+- ✅ **SPARQL-safe**: Won't conflict with SPARQL 1.1 property paths (`/`, `|`, `^`, etc.)
 - ✅ Easy to type and read
-- Helper macro: `(rdf namespace resource)` expands to `namespace/resource`
-- Conversion needed between el-rdf (`:`) and cl-rdf (`/`) formats
+- Helper macro: `(rdf namespace resource)` expands to `namespace.resource`
+- Conversion needed between el-rdf (`:`) and cl-rdf (`.`) formats
+- **TODO**: Handle periods in resource names during TTL import (e.g., `resource.v2` should not be split)
 
 ### 2. SPARQL Variables
 
@@ -318,7 +320,13 @@ cl-rdf/
     - `expand-prefixed-iri`
     - `intern-rdf-resource`
     - Test first: Prefix registration and expansion
-    - Note: Convert `:` to `/` when creating symbols
+    - Note: Convert `:` to `.` when creating symbols
+    - **CRITICAL TODO**: Handle periods in resource local names properly
+      - Example: `<http://example.org/resource.v2>` with prefix `ex:`
+      - Should become `ex.resource.v2` NOT split incorrectly
+      - Strategy: Only split on FIRST colon after prefix expansion
+      - The namespace is determined by the prefix, not by scanning for separators
+      - Local part keeps all characters including `.` intact
 
 31. **TTL value parsing**
     - `parse-ttl-value`
@@ -540,18 +548,18 @@ Provide compatibility macros for el-rdf users:
 
 ```lisp
 (defmacro rdf (namespace resource)
-  "Create RDF symbol: (rdf schema Person) => SCHEMA/PERSON"
-  `(intern (format nil "~A/~A" ',namespace ',resource)))
+  "Create RDF symbol: (rdf schema Person) => SCHEMA.PERSON"
+  `(intern (format nil "~A.~A" ',namespace ',resource)))
 
 ;; Or for string inputs
 (defun make-rdf-symbol (namespace-string resource-string)
-  "Create RDF symbol from strings: (make-rdf-symbol \"schema\" \"Person\") => SCHEMA/PERSON"
-  (intern (format nil "~A/~A" namespace-string resource-string) :cl-rdf))
+  "Create RDF symbol from strings: (make-rdf-symbol \"schema\" \"Person\") => SCHEMA.PERSON"
+  (intern (format nil "~A.~A" namespace-string resource-string) :cl-rdf))
 
 ;; Convert from el-rdf format
 (defun elisp-symbol-to-cl-rdf (elisp-symbol-name)
-  "Convert el-rdf symbol name 'schema:Person' to cl-rdf symbol SCHEMA/PERSON"
-  (intern (substitute #\/ #\: elisp-symbol-name) :cl-rdf))
+  "Convert el-rdf symbol name 'schema:Person' to cl-rdf symbol SCHEMA.PERSON"
+  (intern (substitute #\. #\: elisp-symbol-name) :cl-rdf))
 ```
 
 ## Documentation
@@ -588,7 +596,7 @@ Create CL-specific documentation covering:
 ### Symbol Format Differences
 
 **el-rdf**: Uses colon separator `namespace:resource`
-**cl-rdf**: Uses forward slash separator `namespace/resource`
+**cl-rdf**: Uses period separator `namespace.resource`
 
 ### Conversion Functions (TODO - Phase 13)
 
@@ -596,12 +604,12 @@ These functions will enable interoperability between el-rdf and cl-rdf serialize
 
 ```lisp
 (defun convert-symbol-elisp-to-cl (symbol-name)
-  "Convert el-rdf symbol name to cl-rdf format: namespace:resource -> namespace/resource"
-  (substitute #\/ #\: symbol-name))
+  "Convert el-rdf symbol name to cl-rdf format: namespace:resource -> namespace.resource"
+  (substitute #\. #\: symbol-name))
 
 (defun convert-symbol-cl-to-elisp (symbol-name)
-  "Convert cl-rdf symbol name to el-rdf format: namespace/resource -> namespace:resource"
-  (substitute #\: #\/ symbol-name))
+  "Convert cl-rdf symbol name to el-rdf format: namespace.resource -> namespace:resource"
+  (substitute #\: #\. symbol-name))
 
 (defun convert-triple-elisp-to-cl (triple)
   "Convert a triple from el-rdf format to cl-rdf format"
@@ -638,10 +646,10 @@ These functions will enable interoperability between el-rdf and cl-rdf serialize
 ```lisp
 (test symbol-conversion
   "Test bidirectional symbol conversion"
-  (is (string= "schema/Person"
+  (is (string= "schema.Person"
                (convert-symbol-elisp-to-cl "schema:Person")))
   (is (string= "schema:Person"
-               (convert-symbol-cl-to-elisp "schema/Person")))
+               (convert-symbol-cl-to-elisp "schema.Person")))
 
   ;; Roundtrip test
   (let ((original "foaf:name"))
@@ -654,7 +662,7 @@ These functions will enable interoperability between el-rdf and cl-rdf serialize
   (let ((elisp-triple '(|person1| |foaf:name| "John")))
     (let ((cl-triple (convert-triple-elisp-to-cl elisp-triple)))
       (is (eq (first cl-triple) 'person1))
-      (is (eq (second cl-triple) 'foaf/name))
+      (is (eq (second cl-triple) 'foaf.name))
       (is (string= (third cl-triple) "John")))))
 ```
 
@@ -677,6 +685,82 @@ Both el-rdf and cl-rdf documentation should mention:
 2. How to convert between formats
 3. When conversion is needed (serialization, not runtime)
 4. Performance implications (conversion overhead)
+
+### Handling Periods in Resource Names (TODO)
+
+**Challenge**: RDF resource local names can legitimately contain periods.
+
+**Examples of valid RDF resources**:
+- `http://example.org/version.v2` → should be `ex.version.v2`
+- `http://example.org/file.txt` → should be `ex.file.txt`
+- `http://example.org/api.v1.2.3` → should be `ex.api.v1.2.3`
+
+**Solution Strategy**:
+
+When parsing TTL and creating cl-rdf symbols:
+
+1. **During prefix expansion**:
+   - Input: `ex:resource.v2` where `ex:` → `http://example.org/`
+   - After prefix lookup: `http://example.org/resource.v2`
+   - Extract namespace: `http://example.org/` → maps to prefix `ex`
+   - Extract local part: `resource.v2` (keep everything after namespace URI)
+   - Build symbol: `ex.resource.v2`
+
+2. **Key insight**: The namespace separator (`.` in cl-rdf, `:` in el-rdf) appears only ONCE between the prefix and the local part. Everything after that is the local part, which can contain any characters including periods.
+
+3. **Implementation**:
+```lisp
+(defun make-rdf-symbol-from-iri (full-iri prefixes)
+  "Create cl-rdf symbol from full IRI and prefix table
+   Returns NAMESPACE.LOCALPART where LOCALPART may contain periods"
+  (let ((prefix-namespace (find-matching-prefix full-iri prefixes)))
+    (if prefix-namespace
+        (let* ((prefix (car prefix-namespace))
+               (namespace-uri (cdr prefix-namespace))
+               (local-part (subseq full-iri (length namespace-uri))))
+          ;; Important: local-part can contain periods!
+          (intern (format nil "~A.~A" prefix local-part)))
+        ;; No prefix found, use full IRI as symbol
+        (intern full-iri))))
+```
+
+4. **Test cases needed**:
+```lisp
+(test ttl-import-with-periods-in-local-names
+  "Test that periods in resource local names are preserved"
+  (let ((graph (make-graph))
+        (ttl "@prefix ex: <http://example.org/> .
+ex:resource.v2 ex:hasProp \"value\" .
+ex:file.txt ex:type \"text\" .
+ex:api.v1.2.3 ex:stable \"true\" ."))
+    (parse-ttl-content graph ttl)
+
+    ;; All these should work - periods in local names preserved
+    (is (ask '((ex.resource.v2 ex.hasProp "value")) graph))
+    (is (ask '((ex.file.txt ex.type "text")) graph))
+    (is (ask '((ex.api.v1.2.3 ex.stable "true")) graph))))
+```
+
+5. **Reverse conversion for el-rdf**:
+   - `ex.resource.v2` in cl-rdf → `ex:resource.v2` in el-rdf
+   - Only convert the first `.` to `:`, rest stay as `.`
+   - Need smarter conversion than simple `substitute`
+
+**Updated conversion functions**:
+```lisp
+(defun convert-symbol-cl-to-elisp-smart (symbol-name)
+  "Convert cl-rdf symbol to el-rdf, only changing first period to colon"
+  (let ((dot-pos (position #\. symbol-name)))
+    (if dot-pos
+        (concatenate 'string
+                     (subseq symbol-name 0 dot-pos)
+                     ":"
+                     (subseq symbol-name (1+ dot-pos)))
+        symbol-name)))
+
+;; Test: "ex.resource.v2" -> "ex:resource.v2" ✓
+;; Test: "ex.file.txt" -> "ex:file.txt" ✓
+```
 
 ## Future Enhancements
 
