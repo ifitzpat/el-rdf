@@ -916,11 +916,38 @@ git commit -m "Implement function-name with tests"
 - All functions under 30-line limit
 - 20 comprehensive test cases covering all scenarios
 
+✅ **Phase 6: Query Execution Engine** (13/13 functions + 2 conditions)
+- **Conditions**: `query-error`, `pattern-match-failure`, `binding-conflict`
+- `clean-bindings` - Remove success markers from bindings
+- `compatible-bindings-p` - Check binding compatibility
+- `update-bindings` - Merge compatible bindings
+- `normalize-pattern` - Convert rdf@type to 'a' (only for concrete patterns)
+- `optional-clause-p` - Detect OPTIONAL clauses
+- `unwrap-optional` - Extract pattern from OPTIONAL wrapper
+- `normalize-binding-results` - Ensure consistent result structure
+- `%process-first-clause` - Handle first pattern match (29 lines)
+- `%process-multiple-branches` - Split execution per branch (27 lines)
+- `%process-single-branch` - Process single binding path (23 lines)
+- `%graph-query-internal` - Core recursive query engine (28 lines)
+- `graph-query` - Public interface with error handling (24 lines)
+- `where` - Alias for graph-query
+
+**Implementation Notes**:
+- Full Common Lisp condition system with restart-case/handler-bind
+- Default behavior: returns :no-match on pattern failure (not error)
+- Caller can override with custom handlers (use-empty-bindings, return-no-match)
+- Refactored into helpers to meet 30-line limit (originally 85+ lines in el-rdf)
+- Uses log4cl for debug logging (special variable *debug*)
+- OPTIONAL clause support (left-join semantics)
+- 31 comprehensive test cases covering all scenarios
+- All functions under 30-line limit ✅
+- **TODO**: Nested OPTIONAL not yet supported (documented limitation)
+
 ### Current Phase
 
-🔄 **Phase 6: Query Execution Engine** (0/? functions)
+🔄 **Phase 7: Query Operations** (0/? functions)
 - Next phase to be implemented
-- See lines 207-226 for details
+- See lines 227-262 for details
 
 ## Next Steps
 
@@ -936,7 +963,8 @@ git commit -m "Implement function-name with tests"
 10. ✅ Complete Phase 3: Hook System (3/3)
 11. ✅ Complete Phase 4: Triple Retrieval (2/2)
 12. ✅ Complete Phase 5: Pattern Matching (5/5)
-13. 🔄 Begin Phase 6: Query Execution Engine
+13. ✅ Complete Phase 6: Query Execution Engine (13/13 + condition system)
+14. 🔄 Begin Phase 7: Query Operations
 
 ---
 
