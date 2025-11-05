@@ -40,30 +40,57 @@ jobs:
       - name: Install Quicklisp
         run: |
           curl -O https://beta.quicklisp.org/quicklisp.lisp
-          ${{ matrix.lisp }} --non-interactive --load quicklisp.lisp \
-            --eval '(quicklisp-quickstart:install :path "~/quicklisp/")'
+          if [ "${{ matrix.lisp }}" = "sbcl" ]; then
+            sbcl --non-interactive --load quicklisp.lisp \
+              --eval '(quicklisp-quickstart:install :path "~/quicklisp/")'
+          else
+            ecl -norc -shell quicklisp.lisp \
+              -eval '(quicklisp-quickstart:install :path "~/quicklisp/")' \
+              -eval '(ext:quit)'
+          fi
 
       - name: Load system and run tests
         run: |
-          ${{ matrix.lisp }} --non-interactive \
-            --load ~/quicklisp/setup.lisp \
-            --eval '(push (truename ".") asdf:*central-registry*)' \
-            --eval '(format t "~%~%========================================~%")' \
-            --eval '(format t "Loading cl-rdf test system...~%")' \
-            --eval '(format t "========================================~%~%")' \
-            --eval '(ql:quickload :cl-rdf/tests)' \
-            --eval '(format t "~%~%========================================~%")' \
-            --eval '(format t "Running cl-rdf test suite with FiveAM...~%")' \
-            --eval '(format t "========================================~%~%")' \
-            --eval '(let ((result (fiveam:run! :cl-rdf)))
-                      (fresh-line)
-                      (if (fiveam:results-status result)
-                          (progn
-                            (format t "~%~%✓ All tests passed!~%~%")
-                            (uiop:quit 0))
-                          (progn
-                            (format t "~%~%✗ Some tests failed!~%~%")
-                            (uiop:quit 1))))'
+          if [ "${{ matrix.lisp }}" = "sbcl" ]; then
+            sbcl --non-interactive \
+              --load ~/quicklisp/setup.lisp \
+              --eval '(push (truename ".") asdf:*central-registry*)' \
+              --eval '(format t "~%~%========================================~%")' \
+              --eval '(format t "Loading cl-rdf test system...~%")' \
+              --eval '(format t "========================================~%~%")' \
+              --eval '(ql:quickload :cl-rdf/tests)' \
+              --eval '(format t "~%~%========================================~%")' \
+              --eval '(format t "Running cl-rdf test suite with FiveAM...~%")' \
+              --eval '(format t "========================================~%~%")' \
+              --eval '(let ((result (fiveam:run! :cl-rdf)))
+                        (fresh-line)
+                        (if (fiveam:results-status result)
+                            (progn
+                              (format t "~%~%✓ All tests passed!~%~%")
+                              (uiop:quit 0))
+                            (progn
+                              (format t "~%~%✗ Some tests failed!~%~%")
+                              (uiop:quit 1))))'
+          else
+            ecl -norc -shell ~/quicklisp/setup.lisp \
+              -eval '(push (truename ".") asdf:*central-registry*)' \
+              -eval '(format t "~%~%========================================~%")' \
+              -eval '(format t "Loading cl-rdf test system...~%")' \
+              -eval '(format t "========================================~%~%")' \
+              -eval '(ql:quickload :cl-rdf/tests)' \
+              -eval '(format t "~%~%========================================~%")' \
+              -eval '(format t "Running cl-rdf test suite with FiveAM...~%")' \
+              -eval '(format t "========================================~%~%")' \
+              -eval '(let ((result (fiveam:run! :cl-rdf)))
+                        (fresh-line)
+                        (if (fiveam:results-status result)
+                            (progn
+                              (format t "~%~%✓ All tests passed!~%~%")
+                              (ext:quit 0))
+                            (progn
+                              (format t "~%~%✗ Some tests failed!~%~%")
+                              (ext:quit 1))))'
+          fi
 
   # Job that checks all implementations passed
   all-tests-passed:
