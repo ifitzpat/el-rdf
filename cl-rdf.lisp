@@ -1775,3 +1775,62 @@ Examples:
     (uiop:run-program (list "dot" dot-file "-Tjson" "-o" filename)
                       :ignore-error-status t)
     filename))
+
+;;;; Phase 13: Bidirectional Format Conversion (cl-rdf → el-rdf)
+
+(defun convert-symbol-cl-to-elisp (symbol)
+  "Convert cl-rdf symbol to el-rdf format (@ to :).
+
+Arguments:
+  SYMBOL - Symbol with @ separator
+
+Returns:
+  Symbol with : separator (may use pipe notation)
+
+Examples:
+  (convert-symbol-cl-to-elisp 'foaf@name) => |foaf:name|
+  (convert-symbol-cl-to-elisp 'alice) => alice"
+  (if (symbolp symbol)
+      (let ((name (symbol-name symbol)))
+        (if (find #\@ name)
+            (intern (substitute #\: #\@ name))
+            symbol))
+      symbol))
+
+(defun convert-triple-cl-to-elisp (triple)
+  "Convert triple from cl-rdf format to el-rdf format.
+
+Arguments:
+  TRIPLE - Triple using cl-rdf symbol format
+
+Returns:
+  Triple using el-rdf symbol format
+
+Examples:
+  (convert-triple-cl-to-elisp '(alice foaf@name \"Alice\"))
+  => (alice |foaf:name| \"Alice\")"
+  (mapcar (lambda (elem)
+            (if (symbolp elem)
+                (convert-symbol-cl-to-elisp elem)
+                elem))
+          triple))
+
+(defun save-for-elisp (graph filename)
+  "Save GRAPH triples to FILENAME in el-rdf format (: separator).
+
+Arguments:
+  GRAPH - local-graph instance
+  FILENAME - Path to save file
+
+Side Effects:
+  Writes file to filesystem in el-rdf format
+
+Examples:
+  (save-for-elisp graph \"/tmp/my-graph-elisp.rdf\")"
+  (let* ((triples (raw-triples '(t t t) graph))
+         (el-triples (mapcar #'convert-triple-cl-to-elisp triples))
+         (serialized (triples-to-string el-triples)))
+    (with-open-file (out filename :direction :output
+                         :if-exists :supersede
+                         :if-does-not-exist :create)
+      (write-string serialized out))))

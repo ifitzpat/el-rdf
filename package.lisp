@@ -115,10 +115,11 @@
            #:render-graph-json)
 
   ;; Format conversion (el-rdf ↔ cl-rdf)
+  ;; Phase 9: el-rdf → cl-rdf
   (:export #:el-rdf-symbol-p
            #:convert-symbol-el-to-cl
            #:convert-triple-el-to-cl
-           #:convert-symbol-elisp-to-cl  ; Phase 13 (bidirectional)
-           #:convert-symbol-cl-to-elisp  ; Phase 13 (bidirectional)
-           #:load-elisp-graph            ; Phase 13
-           #:save-for-elisp))            ; Phase 13
+           ;; Phase 13: cl-rdf → el-rdf (bidirectional)
+           #:convert-symbol-cl-to-elisp
+           #:convert-triple-cl-to-elisp
+           #:save-for-elisp)
