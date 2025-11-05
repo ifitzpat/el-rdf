@@ -1,0 +1,159 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+el-rdf is an in-memory RDF triple store implemented in Emacs Lisp. It provides SPARQL-like query operations, TTL file import, and graph visualization capabilities.
+
+## Development Commands
+
+### Running Tests
+```bash
+make test
+# Or explicitly:
+emacs -batch -l ert -l test-el-rdf.el -f ert-run-tests-batch-and-exit
+```
+
+### Loading in Emacs
+```elisp
+(load-file "el-rdf.el")
+(require 'el-rdf)
+```
+
+There is no build or compilation step - this is pure Emacs Lisp.
+
+## Code Architecture
+
+### Triple Storage System
+
+el-rdf uses three hash table indices for efficient querying:
+
+- **SPO** (Subject-Predicate-Object): Primary index by subject, stores `((predicate . (obj1 obj2 ...)))`
+- **OSP** (Object-Subject-Predicate): Index by object for reverse lookups, stores `((subject . (pred1 pred2 ...)))`
+- **POS** (Predicate-Object-Subject): Index by predicate, stores `((object . (subj1 subj2 ...)))`
+
+The `add-triple` and `delete-triple` functions maintain all three indices. The `triples` function chooses which index to use based on the query pattern.
+
+### Query Execution Flow
+
+1. **Pattern Selection** (`triples` function): Determines which index to use based on non-variable components
+2. **Pattern Matching** (`pat-match` function): Matches patterns against retrieved triples, returns variable bindings
+3. **Binding Management** (`graph-query` / `el-rdf--graph-query-internal`): Handles complex multi-clause queries
+4. **Result Projection** (`select`, `construct`, `ask`): Transforms raw bindings into result format
+
+### Important Query Semantics
+
+- Variables are symbols starting with `$` (e.g., `$subject`, `$name`)
+- The symbol `t` acts as a wildcard matching any value
+- `rdf:type` and `a` are treated as equivalent at storage time (normalized to `a`)
+- Query results maintain triple-nested structure: `(((bindings1)) ((bindings2)))` where each binding is a list of `(var . value)` pairs
+
+### Content Reference System
+
+Large strings (> `el-rdf-max-string-length`, default 1000 chars) are automatically stored as file references:
+- Content is hashed with MD5 and stored in `XDG_CACHE_HOME/el-rdf/content-<hash>.txt`
+- Triple objects store `"file:content-<hash>.txt"` references
+- `triples` function automatically resolves references (use `raw-triples` to preserve references)
+- Enables deduplication and reduces memory usage for large literals
+
+### Checkpointing System
+
+Named graphs can be automatically saved on modifications:
+- Register with `el-rdf-register-graph-for-checkpointing`
+- Checkpoints saved to `XDG_CACHE_HOME/el-rdf/checkpoints/<name>.checkpoint`
+- Metadata includes operation type, data size, timestamp, call stack
+- Recover with `el-rdf-recover-from-checkpoint` or `el-rdf-restore-named-graph`
+
+### Hook System
+
+Graphs support hooks for CRUD operations:
+- **add-hooks**: Called after `add-triples` (not `add-triple`)
+- **delete-hooks**: Called after `delete-triples` (not `delete-triple`)
+- **query-hooks**: Called during `graph-query` execution
+- Hooks receive: `(graph operation data)`
+- Manage with `add-hook-to-graph`, `remove-hook-from-graph`, `get-graph-hooks`
+
+### TTL Import System
+
+The `import-ttl` function parses Turtle (TTL) files:
+- Tokenizer handles quoted strings (including triple-quoted), IRIs, blank nodes, comments
+- Supports `@prefix` directives, angle bracket IRIs, blank node brackets `[ ... ]`, RDF collections `( ... )`
+- URIs are compressed to prefixed form (e.g., `<http://schema.org/Person>` → `schema:Person`)
+- Optional namespace parameter prefixes imported resources
+- Blank nodes use el-rdf's `bnode` function (`_:G<number>` format)
+- Language tags are currently stripped from literals
+
+### Critical Implementation Details
+
+**Triple Normalization:**
+- `rdf:type` is normalized to `a` in `add-triple` (line 323)
+- Queries handle equivalence by transforming results in `triples` function (lines 464-476)
+- Never normalize patterns containing variables - equivalence is handled at retrieval time
+
+**Binding Structure Consistency:**
+- All query paths must return triple-nested structure for consistency
+- Use `el-rdf--normalize-binding-results` to ensure uniform output
+- Single-clause queries wrap results: `(mapcar #'list bindings)` (line 859)
+
+**Large Dataset Handling:**
+- Batch processing in `expand-duals` (lines 392-423) with `sit-for` yields to prevent stack overflow
+- `max-lisp-eval-depth`, `max-specpdl-size`, `max-macroexpand-depth` increased to 5000+ (lines 35-40)
+- Universal pattern queries (`t t t`) use batched key processing (lines 486-522)
+
+**Serialization:**
+- `triples-to-string` uses `%S` format for proper symbol quoting, critical for symbols with `#` characters (line 597)
+- `save-graph` uses `raw-triples` to preserve file references
+- `load-graph` reads serialized data with standard `read` function
+
+## Key Functions Reference
+
+**Graph Management:**
+- `make-graph` - Create new graph with optional name for checkpointing
+- `add-triple` / `add-triples` - Add data (only `add-triples` triggers hooks)
+- `delete-triple` / `delete-triples` - Remove data (only `delete-triples` triggers hooks)
+- `triples` - Retrieve triples matching pattern (resolves content references)
+- `raw-triples` - Retrieve without resolving content references
+
+**Querying:**
+- `graph-query` (alias: `where`) - Core pattern matching with OPTIONAL support
+- `select` - Project variable bindings from query results
+- `ask` - Boolean query, returns t/nil
+- `construct` - Build new triples from query results
+- `filter` - Apply predicate to filter bindings
+- `delete-data` - Pattern-based deletion
+
+**Import/Export:**
+- `import-ttl` - Parse and import Turtle file
+- `save-graph` / `load-graph` - Serialize/deserialize graph
+- `render-graph` - Export to SVG via Graphviz
+- `render-graph-json` - Export to JSON format
+
+## Testing
+
+The test suite (test-el-rdf.el) provides comprehensive coverage:
+- Basic CRUD operations
+- Query patterns (SELECT, ASK, CONSTRUCT, FILTER, OPTIONAL)
+- Hook system functionality
+- Checkpointing and recovery
+- Content reference system
+- TTL import with various edge cases (blank nodes, collections, language tags, nested structures)
+- Serialization roundtrip tests
+
+When modifying core functionality, ensure existing tests pass and add new tests for edge cases.
+
+## Common Pitfalls
+
+1. **Don't normalize patterns with variables** - The `triples` function handles `a`/`rdf:type` equivalence automatically
+2. **Only bulk operations trigger hooks** - `add-triple` and `delete-triple` do not call hooks, only `add-triples` and `delete-triples`
+3. **Binding structure must be consistent** - All query execution paths must maintain triple-nested structure
+4. **Use `%S` for symbol serialization** - Required for symbols containing special characters like `#`
+5. **RDF collections require careful parsing** - Avoid duplicate `rdf:rest` triples and ensure punctuation doesn't become list items
+6. **Content references are transparent** - Most code should use `triples` not `raw-triples` to get resolved content
+
+## Dependencies
+
+- Emacs 27.1+
+- dash (list manipulation library from MELPA)
+- cl-seq (Common Lisp sequence functions, built-in)
+- Graphviz `dot` command (optional, for visualization)
