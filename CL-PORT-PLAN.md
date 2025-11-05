@@ -388,6 +388,19 @@ cl-rdf/
         (uiop:run-program (list "dot" dot-file "-Tsvg" "-o" filename))))
     ```
 
+### Phase 13: Bidirectional Format Conversion (Extension)
+
+37. **Symbol and triple conversion (cl-rdf → el-rdf)**
+    - `convert-symbol-cl-to-elisp` - Convert @ to : in symbols
+    - `convert-triple-cl-to-elisp` - Convert entire triples
+    - Test first: Symbol and triple conversion
+
+38. **Serialization for el-rdf**
+    - `save-for-elisp` - Save graph in el-rdf format with : separator
+    - Test first: Round-trip conversion (cl-rdf → el-rdf → cl-rdf)
+    - **Purpose**: Enables full interoperability between cl-rdf and el-rdf
+    - **Use case**: Share graphs between Common Lisp and Emacs Lisp implementations
+
 ## Testing Strategy
 
 ### Test-Driven Development Approach
@@ -1092,13 +1105,12 @@ git commit -m "Implement function-name with tests"
 
 ### Current Phase
 
-✅ **Phase 12: Visualization** (8/8 functions) - COMPLETE
-- namespace, nodes, literals, render-triple
-- filter-triples, apply-node-styles
-- render-triples, render-graph, render-graph-json
-- All tests passing on CI (10 comprehensive tests)
-- Graphviz integration with fallback for missing dot command
-- See lines 369-390 for details
+✅ **Phase 13: Bidirectional Format Conversion** (3/3 functions) - COMPLETE
+- convert-symbol-cl-to-elisp, convert-triple-cl-to-elisp, save-for-elisp
+- Enables cl-rdf → el-rdf conversion for full interoperability
+- Round-trip conversion tested (cl-rdf → el-rdf → cl-rdf)
+- All tests passing on CI (6 comprehensive tests)
+- Complements Phase 9 for complete bidirectional support
 
 ## Next Steps
 
@@ -1121,6 +1133,7 @@ git commit -m "Implement function-name with tests"
 17. ✅ Complete Phase 10: Checkpointing System (10/10 - automatic checkpointing with metadata)
 18. ✅ Complete Phase 11: TTL Import (10/10 - RDF collection bug fix, @ separator support)
 19. ✅ Complete Phase 12: Visualization (8/8 - Graphviz DOT export to SVG/JSON)
+20. ✅ Complete Phase 13: Bidirectional Format Conversion (3/3 - cl-rdf → el-rdf for full interoperability)
 
 ---
 
