@@ -1092,13 +1092,13 @@ git commit -m "Implement function-name with tests"
 
 ### Current Phase
 
-✅ **Phase 11: TTL Import** (10/10 functions) - COMPLETE
-- register-prefix, expand-prefixed-iri, intern-rdf-resource
-- parse-ttl-value, simple-tokenize-ttl
-- parse-rdf-collection (fixes el-rdf bug), parse-blank-node-bracket
-- parse-simple-ttl-statement, parse-ttl-content, import-ttl
-- All tests passing on CI (9 comprehensive tests)
-- See lines 317-359 for details
+✅ **Phase 12: Visualization** (8/8 functions) - COMPLETE
+- namespace, nodes, literals, render-triple
+- filter-triples, apply-node-styles
+- render-triples, render-graph, render-graph-json
+- All tests passing on CI (10 comprehensive tests)
+- Graphviz integration with fallback for missing dot command
+- See lines 369-390 for details
 
 ## Next Steps
 
@@ -1120,6 +1120,7 @@ git commit -m "Implement function-name with tests"
 16. ✅ Complete Phase 9: Serialization and Format Conversion (7/7 - save/load with el-rdf migration support)
 17. ✅ Complete Phase 10: Checkpointing System (10/10 - automatic checkpointing with metadata)
 18. ✅ Complete Phase 11: TTL Import (10/10 - RDF collection bug fix, @ separator support)
+19. ✅ Complete Phase 12: Visualization (8/8 - Graphviz DOT export to SVG/JSON)
 
 ---
 
