@@ -10,8 +10,7 @@
                  content-reference-p el-rdf-symbol-p))
 
 ;; Type declarations for hot paths
-(declaim (ftype (function (symbol) boolean) variablep wildcardp))
-(declaim (ftype (function (t) boolean) var-or-wildp))
+(declaim (ftype (function (t) boolean) variablep wildcardp var-or-wildp))
 (declaim (ftype (function (list local-graph) null) add-triple))
 (declaim (ftype (function (list local-graph) list) triples))
 (declaim (ftype (function (list list &optional list) (or null list)) pat-match))
@@ -84,7 +83,6 @@ Examples:
   (variablep '$subject) => T
   (variablep '$name) => T
   (variablep 'regular-symbol) => NIL"
-  (declare (type symbol symbol))
   (and (symbolp symbol)
        (let ((name (symbol-name symbol)))
          (declare (type string name))
