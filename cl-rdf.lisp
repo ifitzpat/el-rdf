@@ -2327,3 +2327,227 @@ Examples:
          (processed (%convert-el-to-cl-in-string content))
          (triples (read-from-string processed)))
     (add-triples triples graph)))
+
+;;;; ============================================================================
+;;;; Phase 10: Checkpointing System
+;;;; ============================================================================
+
+;;; Automatic checkpoint system for named graphs.
+;;; Checkpoints are saved to XDG_CACHE_HOME/cl-rdf/checkpoints/
+
+(defvar *graph-checkpoints* (make-hash-table :test 'eq)
+  "Hash table mapping graphs to their checkpoint information.
+Each entry maps graph to (name . last-checkpoint-time).")
+
+;;; -----------------------------------------------------------------------------
+;;; Checkpoint Utilities
+;;; -----------------------------------------------------------------------------
+
+(defun get-checkpoint-dir ()
+  "Get the checkpoint directory for cl-rdf, creating it if necessary.
+
+Returns:
+  Pathname of checkpoint directory
+
+Examples:
+  (get-checkpoint-dir)
+  => #P\"/home/user/.cache/cl-rdf/checkpoints/\""
+  (let* ((cache-home (or (uiop:getenv "XDG_CACHE_HOME")
+                         (merge-pathnames ".cache/" (user-homedir-pathname))))
+         (checkpoint-dir (merge-pathnames "cl-rdf/checkpoints/" cache-home)))
+    (ensure-directories-exist checkpoint-dir)
+    checkpoint-dir))
+
+(defun checkpoint-file-path (graph-name)
+  "Generate checkpoint file path for GRAPH-NAME.
+
+Arguments:
+  GRAPH-NAME - String name of the graph
+
+Returns:
+  Pathname for checkpoint file
+
+Examples:
+  (checkpoint-file-path \"my-graph\")
+  => #P\"/home/user/.cache/cl-rdf/checkpoints/my-graph.checkpoint\""
+  (merge-pathnames (format nil "~A.checkpoint" graph-name)
+                   (get-checkpoint-dir)))
+
+;;; -----------------------------------------------------------------------------
+;;; Checkpoint Operations
+;;; -----------------------------------------------------------------------------
+
+(defun register-graph-for-checkpointing (graph graph-name)
+  "Register GRAPH for automatic checkpointing with GRAPH-NAME.
+
+The graph will be checkpointed automatically when add-hooks
+or delete-hooks are triggered.
+
+Arguments:
+  GRAPH - The graph to register
+  GRAPH-NAME - String name for checkpoint files
+
+Side Effects:
+  - Adds graph to *graph-checkpoints* hash table
+  - Adds checkpoint-hook to graph's add-hooks and delete-hooks
+
+Examples:
+  (register-graph-for-checkpointing my-graph \"my-data\")"
+  (setf (gethash graph *graph-checkpoints*)
+        (cons graph-name (get-universal-time)))
+  (add-hook-to-graph graph 'add-hooks #'checkpoint-hook)
+  (add-hook-to-graph graph 'delete-hooks #'checkpoint-hook))
+
+(defun checkpoint-hook (graph operation data)
+  "Hook function that checkpoints registered graphs.
+
+Called automatically by hooks after add-triples or delete-triples.
+
+Arguments:
+  GRAPH - The graph being modified
+  OPERATION - Operation type ('add-triples or 'delete-triples)
+  DATA - List of triples being added/deleted
+
+Side Effects:
+  Saves graph to checkpoint file and updates metadata"
+  (let ((checkpoint-info (gethash graph *graph-checkpoints*)))
+    (when checkpoint-info
+      (let* ((graph-name (car checkpoint-info))
+             (checkpoint-file (checkpoint-file-path graph-name)))
+        (save-graph graph checkpoint-file)
+        (save-checkpoint-metadata graph-name operation data)
+        (setf (gethash graph *graph-checkpoints*)
+              (cons graph-name (get-universal-time)))))))
+
+(defun save-named-graph (graph)
+  "Save a named graph to its checkpoint file immediately.
+
+The graph must have a name (created with :name keyword).
+
+Arguments:
+  GRAPH - Named graph to save
+
+Side Effects:
+  Writes checkpoint file and metadata
+
+Examples:
+  (save-named-graph my-graph)"
+  (let ((graph-name (graph-name graph)))
+    (unless graph-name
+      (error "Graph has no name - cannot save by name"))
+    (save-graph graph (checkpoint-file-path graph-name))
+    (save-checkpoint-metadata graph-name 'manual-save nil)))
+
+(defun restore-named-graph (graph-name)
+  "Restore a graph from its checkpoint file.
+
+Creates a new graph with GRAPH-NAME, loads data from checkpoint,
+and registers it for continued checkpointing.
+
+Arguments:
+  GRAPH-NAME - String name of checkpoint to restore
+
+Returns:
+  Restored graph
+
+Examples:
+  (restore-named-graph \"my-data\")"
+  (let ((checkpoint-file (checkpoint-file-path graph-name)))
+    (unless (probe-file checkpoint-file)
+      (error "No checkpoint file found for ~A" graph-name))
+    (let ((restored-graph (make-graph :name graph-name)))
+      (load-graph restored-graph checkpoint-file)
+      (register-graph-for-checkpointing restored-graph graph-name)
+      restored-graph)))
+
+;;; -----------------------------------------------------------------------------
+;;; Checkpoint Metadata
+;;; -----------------------------------------------------------------------------
+
+(defun save-checkpoint-metadata (graph-name operation data)
+  "Save checkpoint metadata for GRAPH-NAME.
+
+Metadata includes operation type, data size, and timestamp.
+
+Arguments:
+  GRAPH-NAME - String name of graph
+  OPERATION - Symbol representing operation type
+  DATA - List of triples (for size calculation)
+
+Side Effects:
+  Writes metadata file
+
+Examples:
+  (save-checkpoint-metadata \"my-graph\" 'add-triples triples)"
+  (let ((metadata-file (merge-pathnames
+                        (format nil "~A.metadata" graph-name)
+                        (get-checkpoint-dir)))
+        (metadata (list :last-operation operation
+                        :data-size (length data)
+                        :timestamp (get-universal-time))))
+    (with-open-file (out metadata-file
+                         :direction :output
+                         :if-exists :supersede
+                         :if-does-not-exist :create)
+      (write metadata :stream out))))
+
+(defun load-checkpoint-metadata (graph-name)
+  "Load checkpoint metadata for GRAPH-NAME.
+
+Arguments:
+  GRAPH-NAME - String name of graph
+
+Returns:
+  Plist of metadata or NIL if not found
+
+Examples:
+  (load-checkpoint-metadata \"my-graph\")
+  => (:last-operation add-triples :data-size 10 :timestamp 3918234156)"
+  (let ((metadata-file (merge-pathnames
+                        (format nil "~A.metadata" graph-name)
+                        (get-checkpoint-dir))))
+    (when (probe-file metadata-file)
+      (with-open-file (in metadata-file :direction :input)
+        (read in)))))
+
+(defun list-checkpoints ()
+  "List all available checkpoint files.
+
+Returns:
+  List of checkpoint filenames
+
+Examples:
+  (list-checkpoints)
+  => (\"graph1.checkpoint\" \"graph2.checkpoint\")"
+  (let ((checkpoint-dir (get-checkpoint-dir)))
+    (when (probe-file checkpoint-dir)
+      (mapcar #'file-namestring
+              (uiop:directory-files checkpoint-dir "*.checkpoint")))))
+
+(defun delete-checkpoint (graph-name)
+  "Delete checkpoint files for GRAPH-NAME.
+
+Removes both checkpoint file and metadata file.
+
+Arguments:
+  GRAPH-NAME - String name of checkpoint to delete
+
+Side Effects:
+  Deletes checkpoint and metadata files
+  Removes from *graph-checkpoints* if registered
+
+Examples:
+  (delete-checkpoint \"my-graph\")"
+  (let* ((checkpoint-file (checkpoint-file-path graph-name))
+         (metadata-file (merge-pathnames
+                         (format nil "~A.metadata" graph-name)
+                         (get-checkpoint-dir))))
+    (when (probe-file checkpoint-file)
+      (delete-file checkpoint-file))
+    (when (probe-file metadata-file)
+      (delete-file metadata-file))
+    ;; Remove from registered checkpoints if present
+    (maphash (lambda (graph info)
+               (when (string= (car info) graph-name)
+                 (remhash graph *graph-checkpoints*)))
+             *graph-checkpoints*)))

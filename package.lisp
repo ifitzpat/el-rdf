@@ -80,9 +80,14 @@
            #:triples-to-string)
 
   ;; Checkpointing
-  (:export #:register-graph-for-checkpointing
+  (:export #:get-checkpoint-dir
+           #:checkpoint-file-path
+           #:register-graph-for-checkpointing
+           #:checkpoint-hook
            #:save-named-graph
            #:restore-named-graph
+           #:save-checkpoint-metadata
+           #:load-checkpoint-metadata
            #:list-checkpoints
            #:delete-checkpoint)
 
