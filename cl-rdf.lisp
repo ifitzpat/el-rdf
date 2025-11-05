@@ -1361,25 +1361,26 @@ Examples:
                (string= (aref tokens pos) ")"))
           (progn (incf pos)
                  (setf list-head 'rdf@nil))
-          (loop while (and (< pos (length tokens))
-                           (not (string= (aref tokens pos) ")")))
-                do (let* ((item (aref tokens pos))
-                          (current-node (bnode))
-                          (parsed-item (if (symbolp item)
-                                           item
-                                           (parse-ttl-value graph item namespace))))
-                     (unless list-head
-                       (setf list-head current-node))
-                     (when prev-node
-                       (push (list prev-node 'rdf@rest current-node) triples))
-                     (push (list current-node 'rdf@first parsed-item) triples)
-                     (setf prev-node current-node)
-                     (incf pos)))
-          (when prev-node
-            (push (list prev-node 'rdf@rest 'rdf@nil) triples))
-          (when (and (< pos (length tokens))
-                     (string= (aref tokens pos) ")"))
-            (incf pos))))
+          (progn
+            (loop while (and (< pos (length tokens))
+                             (not (string= (aref tokens pos) ")")))
+                  do (let* ((item (aref tokens pos))
+                            (current-node (bnode))
+                            (parsed-item (if (symbolp item)
+                                             item
+                                             (parse-ttl-value graph item namespace))))
+                       (unless list-head
+                         (setf list-head current-node))
+                       (when prev-node
+                         (push (list prev-node 'rdf@rest current-node) triples))
+                       (push (list current-node 'rdf@first parsed-item) triples)
+                       (setf prev-node current-node)
+                       (incf pos)))
+            (when prev-node
+              (push (list prev-node 'rdf@rest 'rdf@nil) triples))
+            (when (and (< pos (length tokens))
+                       (string= (aref tokens pos) ")"))
+              (incf pos)))))
     (cons (or list-head 'rdf@nil) (cons (nreverse triples) pos))))
 
 (defun parse-blank-node-bracket (tokens pos graph namespace)
