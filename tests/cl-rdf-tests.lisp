@@ -88,6 +88,22 @@
     ;; POS: uses EQ test (for symbols as keys)
     (is (eq 'eq (hash-table-test (graph-pos g))))))
 
+(test variablep
+  "Test variable predicate - identifies symbols starting with $"
+  ;; Variables should return T
+  (is (variablep '$subject))
+  (is (variablep '$name))
+  (is (variablep '$x))
+  (is (variablep '$var123))
+  ;; Non-variables should return NIL
+  (is (not (variablep 'regular-symbol)))
+  (is (not (variablep 'schema.Person)))
+  (is (not (variablep "string")))
+  (is (not (variablep 42)))
+  (is (not (variablep nil)))
+  ;; Symbol that's just $ should still be a variable
+  (is (variablep '$)))
+
 ;;; ============================================================================
 ;;; Phase 2: Triple Storage
 ;;; ============================================================================
