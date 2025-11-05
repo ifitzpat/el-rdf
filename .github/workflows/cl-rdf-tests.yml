@@ -25,58 +25,45 @@ jobs:
       fail-fast: false
       matrix:
         lisp:
-          - sbcl-bin
+          - sbcl
           - ecl
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Common Lisp (${{ matrix.lisp }})
-        uses: 40ants/setup-lisp@v4
-        with:
-          asdf-system: cl-rdf
-
-      - name: Install dependencies
+      - name: Install ${{ matrix.lisp }}
         run: |
-          ros run --eval '(ql:quickload :cl-rdf/tests)' --quit || true
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.lisp }}
 
-      - name: Run tests with output
+      - name: Install Quicklisp
         run: |
-          ros run --eval '
-          (progn
-            (format t "~%~%========================================~%")
-            (format t "Loading cl-rdf test system...~%")
-            (format t "========================================~%~%")
-            (handler-case
-                (progn
-                  (ql:quickload :cl-rdf/tests :silent t)
-                  (format t "~%~%========================================~%")
-                  (format t "Running cl-rdf test suite with FiveAM...~%")
-                  (format t "========================================~%~%")
-                  (let ((result (fiveam:run! :cl-rdf)))
-                    (fresh-line)
-                    (if (fiveam:results-status result)
-                        (progn
-                          (format t "~%~%✓ All tests passed!~%~%")
-                          (uiop:quit 0))
-                        (progn
-                          (format t "~%~%✗ Some tests failed!~%~%")
-                          (uiop:quit 1)))))
-              (error (e)
-                (format t "~%~%ERROR: ~A~%~%" e)
-                (uiop:quit 2))))
-          ' --quit
+          curl -O https://beta.quicklisp.org/quicklisp.lisp
+          ${{ matrix.lisp }} --non-interactive --load quicklisp.lisp \
+            --eval '(quicklisp-quickstart:install :path "~/quicklisp/")' \
+            --eval '(quit)'
 
-      - name: Test summary
-        if: always()
+      - name: Load system and run tests
         run: |
-          if [ $? -eq 0 ]; then
-            echo "✓ Tests passed on ${{ matrix.lisp }}"
-          else
-            echo "✗ Tests failed on ${{ matrix.lisp }}"
-            exit 1
-          fi
+          ${{ matrix.lisp }} --non-interactive \
+            --load ~/quicklisp/setup.lisp \
+            --eval '(format t "~%~%========================================~%")' \
+            --eval '(format t "Loading cl-rdf test system...~%")' \
+            --eval '(format t "========================================~%~%")' \
+            --eval '(ql:quickload :cl-rdf/tests)' \
+            --eval '(format t "~%~%========================================~%")' \
+            --eval '(format t "Running cl-rdf test suite with FiveAM...~%")' \
+            --eval '(format t "========================================~%~%")' \
+            --eval '(let ((result (fiveam:run! :cl-rdf)))
+                      (fresh-line)
+                      (if (fiveam:results-status result)
+                          (progn
+                            (format t "~%~%✓ All tests passed!~%~%")
+                            (uiop:quit 0))
+                          (progn
+                            (format t "~%~%✗ Some tests failed!~%~%")
+                            (uiop:quit 1))))'
 
   # Job that checks all implementations passed
   all-tests-passed:
