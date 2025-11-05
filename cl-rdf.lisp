@@ -2,6 +2,20 @@
 
 (in-package #:cl-rdf)
 
+;;;; Performance Optimization Declarations
+;;;; These improve performance without requiring separate code
+
+;; Inline small utility functions (called frequently)
+(declaim (inline variablep wildcardp var-or-wildp
+                 content-reference-p el-rdf-symbol-p))
+
+;; Type declarations for hot paths
+(declaim (ftype (function (symbol) boolean) variablep wildcardp))
+(declaim (ftype (function (t) boolean) var-or-wildp))
+(declaim (ftype (function (list local-graph) null) add-triple))
+(declaim (ftype (function (list local-graph) list) triples))
+(declaim (ftype (function (list list &optional list) (or null list)) pat-match))
+
 ;;;; Core Data Structures
 
 (defclass local-graph ()
@@ -70,8 +84,10 @@ Examples:
   (variablep '$subject) => T
   (variablep '$name) => T
   (variablep 'regular-symbol) => NIL"
+  (declare (type symbol symbol))
   (and (symbolp symbol)
        (let ((name (symbol-name symbol)))
+         (declare (type string name))
          (and (> (length name) 0)
               (char= (char name 0) #\$)))))
 
@@ -161,6 +177,8 @@ Side Effects:
 Examples:
   (add-triple '(alice foaf@name \"Alice\") graph)
   (add-triple '(bob rdf@type foaf@Person) graph)"
+  (declare (type list triple)
+           (type local-graph graph))
   (destructuring-bind (s p o) triple
     ;; Normalize rdf@type and 'a' to 'a'
     (let ((normalized-p (if (eq p 'rdf@type) 'a p)))
@@ -420,6 +438,7 @@ Examples:
   (triples '(t t foaf@Person) graph)"))
 
 (defmethod triples (pattern (graph local-graph))
+  (declare (type list pattern))
   (let ((s (first pattern))
         (p (second pattern))
         (o (third pattern)))
@@ -477,6 +496,8 @@ Returns:
 Examples:
   (pat-match '($s foaf@name \"Alice\") '(alice foaf@name \"Alice\"))
   => (($s . alice))"
+  (declare (type list pattern triple)
+           (type (or null list) bindings))
   (let ((result-bindings bindings))
     (loop for pattern-elem in pattern
           for triple-elem in triple

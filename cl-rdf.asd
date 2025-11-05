@@ -23,6 +23,77 @@
   :in-order-to ((test-op (test-op #:cl-rdf/tests))))
 
 
+;;; ============================================================================
+;;; Optimized Production Build
+;;; ============================================================================
+;;;
+;;; This system provides an optimized build of cl-rdf for production use.
+;;; It uses the same source code but compiles with aggressive optimization
+;;; settings for maximum performance.
+;;;
+;;; Usage:
+;;;   ;; Development (default - better error messages, debugging)
+;;;   (ql:quickload :cl-rdf)
+;;;
+;;;   ;; Production (optimized - maximum performance)
+;;;   (ql:quickload :cl-rdf/optimized)
+;;;
+;;; Optimization settings:
+;;;   speed 3  - Maximum speed optimization
+;;;   safety 1 - Minimal safety checks (assumes correct usage)
+;;;   debug 1  - Minimal debug info
+;;;   space 0  - Don't optimize for space
+;;;
+;;; Note: The optimized build uses inline functions and type declarations
+;;; that are already present in the source code. This system only changes
+;;; the compiler optimization settings.
+
+(asdf:defsystem #:cl-rdf/optimized
+  :description "Optimized production build of cl-rdf (speed 3, safety 1)"
+  :author "Ian FitzPatrick <ian@ianfitzpatrick.eu>"
+  :license "GPLv3"
+  :version "0.3.0"
+  :homepage "https://github.com/ifitzpat/el-rdf"
+  :bug-tracker "https://github.com/ifitzpat/el-rdf/issues"
+  :source-control (:git "https://github.com/ifitzpat/el-rdf.git")
+
+  :depends-on (#:alexandria
+               #:bordeaux-threads
+               #:lparallel
+               #:ironclad
+               #:log4cl
+               #:cl-ppcre
+               #:uiop)
+
+  ;; Use same source code as main system
+  :components ((:file "package")
+               (:file "cl-rdf" :depends-on ("package")))
+
+  ;; Apply aggressive optimization settings during compilation
+  #+sbcl
+  :around-compile (lambda (next)
+                    (proclaim '(optimize (speed 3) (safety 1) (debug 1) (space 0)))
+                    (funcall next))
+
+  #+ccl
+  :around-compile (lambda (next)
+                    (proclaim '(optimize (speed 3) (safety 1) (debug 1) (space 0)))
+                    (funcall next))
+
+  #+ecl
+  :around-compile (lambda (next)
+                    (proclaim '(optimize (speed 3) (safety 1) (debug 1) (space 0)))
+                    (funcall next))
+
+  ;; Other implementations - add as needed
+  #-(or sbcl ccl ecl)
+  :around-compile (lambda (next)
+                    (proclaim '(optimize (speed 3) (safety 1) (debug 1) (space 0)))
+                    (funcall next))
+
+  :in-order-to ((test-op (test-op #:cl-rdf/tests))))
+
+
 (asdf:defsystem #:cl-rdf/tests
   :description "Test suite for cl-rdf"
   :author "Ian FitzPatrick <ian@ianfitzpatrick.eu>"
