@@ -1727,3 +1727,231 @@ See also: DELETE-TRIPLE, DELETE-TRIPLES, CONSTRUCT, GRAPH-QUERY"
           (delete-triples triples-to-delete graph)
           t))
     (error () nil)))
+
+;;; -----------------------------------------------------------------------------
+;;; Variable Projection (SELECT)
+;;; -----------------------------------------------------------------------------
+
+(defun binding-val (variable bindings)
+  "Extract value for VARIABLE from BINDINGS alist.
+
+Arguments:
+  VARIABLE - Variable symbol (e.g., $name)
+  BINDINGS - Alist of (var . value) pairs
+
+Returns:
+  Value bound to VARIABLE, or NIL if not found
+
+Examples:
+  (binding-val '$name '(($s . alice) ($name . \"Alice\")))
+  => \"Alice\"
+
+See also: BINDINGS-FROM-ROW, SELECT"
+  (cdr (assoc variable bindings)))
+
+(defun bindings-from-row (variables row)
+  "Extract VALUES for VARIABLES from each binding branch in ROW.
+
+Arguments:
+  VARIABLES - List of variable symbols to extract
+  ROW - Binding set (list of binding branches)
+
+Returns:
+  List of value lists, one per binding branch
+
+Examples:
+  (bindings-from-row '($name $age) 
+                     '((($s . alice) ($name . \"Alice\") ($age . 30))))
+  => ((\"Alice\" 30))
+
+See also: BINDING-VAL, SELECT"
+  (mapcar (lambda (binding-branch)
+            (mapcar (lambda (var) (binding-val var binding-branch))
+                    variables))
+          row))
+
+(defun select (variables where-result)
+  "Project VARIABLES from WHERE-RESULT bindings.
+
+This implements SPARQL SELECT semantics:
+- If WHERE-RESULT is :no-match or NIL, returns list with nil for each variable
+- Otherwise, extracts requested variables from each binding
+
+Arguments:
+  VARIABLES - List of variable symbols to project (e.g., '($name $age))
+  WHERE-RESULT - Result from (where clauses graph) or :no-match
+
+Returns:
+  List of value tuples, one per match
+
+Examples:
+  (let ((result (where '(($s foaf@name $n)) graph)))
+    (select '($n) result))
+  => ((\"Alice\") (\"Bob\"))
+
+  (select '($name) :no-match)
+  => ((nil))  ; Partial match semantics
+
+Usage Pattern:
+  (select '($name $age)
+          (where '(($s foaf@name $name)
+                   ($s foaf@age $age))
+                 graph))
+
+See also: WHERE, GRAPH-QUERY, BINDINGS-FROM-ROW"
+  (if (or (not where-result) (eq where-result :no-match))
+      ;; Return nil for all requested variables when WHERE fails
+      (list (mapcar (lambda (var) (declare (ignore var)) nil) variables))
+    ;; Extract requested variables from results
+    (mapcan (lambda (binding-set)
+              (let ((rows (bindings-from-row variables binding-set)))
+                ;; Flatten if rows is a single-element list of a non-list
+                (if (and (= 1 (length rows))
+                         (consp (first rows))
+                         (symbolp (car (first rows))))
+                    (list (first rows))
+                  rows)))
+            where-result)))
+
+;;; -----------------------------------------------------------------------------
+;;; Filter Operations
+;;; -----------------------------------------------------------------------------
+
+(defun eval-with-bindings (bindings predicate)
+  "Bind variables from BINDINGS and evaluate PREDICATE function.
+
+Creates a LET form that binds each variable to its value, then
+evaluates the predicate in that dynamic scope.
+
+**Security Note**: Uses EVAL. Only use with trusted predicates.
+
+Arguments:
+  BINDINGS - Alist of (var . value) pairs
+  PREDICATE - Lambda function that references bound variables
+
+Returns:
+  Result of evaluating PREDICATE with bindings in scope
+
+Examples:
+  (eval-with-bindings '(($x . 5) ($y . 10))
+                      (lambda () (+ $x $y)))
+  => 15
+
+  (eval-with-bindings '(($age . 30))
+                      (lambda () (> $age 25)))
+  => T
+
+Implementation:
+  Builds and evaluates: (let (($x 5) ($y 10)) (funcall predicate))
+
+See also: FILTER"
+  (let ((binding-forms
+          (mapcar (lambda (pair)
+                    (let ((var (car pair))
+                          (val (cdr pair)))
+                      ;; Quote unbound symbols
+                      (when (and (symbolp val) (not (boundp val)))
+                        (setf val `',val))
+                      `(,var ,val)))
+                  ;; Filter out (t . value) success markers
+                  (remove-if (lambda (pair) (eq (car pair) t)) bindings))))
+    (eval `(let ,binding-forms
+             (funcall ,predicate)))))
+
+(defun filter (predicate bindings)
+  "Filter BINDINGS to only those satisfying PREDICATE.
+
+For each binding set, keeps it if ANY binding branch satisfies the predicate.
+The predicate is evaluated with variables dynamically bound.
+
+**Security Note**: Uses EVAL via eval-with-bindings.
+
+Arguments:
+  PREDICATE - Lambda function that references variables (e.g., (lambda () (> $age 30)))
+  BINDINGS - Result from WHERE query
+
+Returns:
+  Filtered binding list
+
+Examples:
+  (let ((results (where '(($s foaf@age $age)) graph)))
+    (filter (lambda () (> $age 30)) results))
+  => Bindings where age > 30
+
+  (filter (lambda () (and (> $age 25) (string= $name \"Alice\"))) results)
+  => Complex predicate
+
+See also: EVAL-WITH-BINDINGS, FILTER-EXISTS, FILTER-NOT-EXISTS"
+  (remove-if-not
+   (lambda (binding-set)
+     ;; Keep if ANY branch satisfies predicate
+     (some (lambda (binding-branch)
+             (eval-with-bindings binding-branch predicate))
+           binding-set))
+   bindings))
+
+;;; -----------------------------------------------------------------------------
+;;; Pattern-Based Filters (SPARQL EXISTS/NOT EXISTS)
+;;; -----------------------------------------------------------------------------
+
+(defun filter-exists (pattern graph bindings)
+  "Keep bindings where PATTERN matches in GRAPH (SPARQL FILTER EXISTS).
+
+For each binding set, substitutes variables into PATTERN and checks
+if it matches any triples in GRAPH.
+
+Arguments:
+  PATTERN - Triple pattern with variables (e.g., '(($person foaf@email $email)))
+  GRAPH - The RDF graph to check against
+  BINDINGS - Result from WHERE query
+
+Returns:
+  Filtered bindings where pattern exists
+
+Examples:
+  ;; Find people who have email addresses
+  (let ((results (where '(($person foaf@name $name)) graph)))
+    (filter-exists '(($person foaf@email $email)) graph results))
+
+  ;; Find people who know someone specific
+  (filter-exists '(($person foaf@knows bob)) graph results)
+
+See also: FILTER-NOT-EXISTS, ASK, FILTER"
+  (remove-if-not
+   (lambda (binding-set)
+     (some (lambda (binding-branch)
+             (let ((instantiated-pattern (sublis binding-branch pattern)))
+               (ask (list instantiated-pattern) graph)))
+           binding-set))
+   bindings))
+
+(defun filter-not-exists (pattern graph bindings)
+  "Keep bindings where PATTERN does NOT match in GRAPH (SPARQL FILTER NOT EXISTS).
+
+For each binding set, substitutes variables into PATTERN and keeps
+the binding only if the pattern FAILS to match in GRAPH.
+
+Arguments:
+  PATTERN - Triple pattern with variables
+  GRAPH - The RDF graph to check against
+  BINDINGS - Result from WHERE query
+
+Returns:
+  Filtered bindings where pattern does not exist
+
+Examples:
+  ;; Find people WITHOUT email addresses
+  (let ((results (where '(($person foaf@name $name)) graph)))
+    (filter-not-exists '(($person foaf@email $email)) graph results))
+
+  ;; Find people who DON'T know someone
+  (filter-not-exists '(($person foaf@knows charlie)) graph results)
+
+See also: FILTER-EXISTS, ASK, FILTER"
+  (remove-if
+   (lambda (binding-set)
+     (some (lambda (binding-branch)
+             (let ((instantiated-pattern (sublis binding-branch pattern)))
+               (ask (list instantiated-pattern) graph)))
+           binding-set))
+   bindings))
