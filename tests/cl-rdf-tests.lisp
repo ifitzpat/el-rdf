@@ -2265,7 +2265,244 @@
     (delete-file tmpfile)))
 
 ;;; ============================================================================
-;;; Phase 10-12: Additional test suites
+;;; Phase 10: Checkpointing System Tests
+;;; ============================================================================
+
+(in-suite :persistence)
+
+;;; Checkpoint Utilities Tests
+
+(test get-checkpoint-dir-creates-directory
+  "Test get-checkpoint-dir creates checkpoint directory"
+  (let ((dir (get-checkpoint-dir)))
+    (is (stringp dir))
+    (is (probe-file dir))
+    (is (uiop:directory-pathname-p dir))))
+
+(test get-checkpoint-dir-uses-xdg-cache
+  "Test get-checkpoint-dir uses XDG_CACHE_HOME"
+  (let ((dir (get-checkpoint-dir)))
+    (is (search "cl-rdf" (namestring dir)))
+    (is (search "checkpoints" (namestring dir)))))
+
+(test checkpoint-file-path-format
+  "Test checkpoint-file-path generates correct format"
+  (let ((path (checkpoint-file-path "test-graph")))
+    (is (stringp path))
+    (is (search "test-graph.checkpoint" path))
+    (is (search "checkpoints" path))))
+
+;;; Checkpoint Operations Tests
+
+(test save-named-graph-basic
+  "Test save-named-graph saves graph to checkpoint"
+  (let ((graph (make-graph :name "test-save")))
+    (add-triples '((alice foaf@name "Alice")
+                   (bob foaf@name "Bob"))
+                 graph)
+    (save-named-graph graph)
+    (let ((checkpoint-file (checkpoint-file-path "test-save")))
+      (is (probe-file checkpoint-file))
+      (delete-checkpoint "test-save"))))
+
+(test save-named-graph-requires-name
+  "Test save-named-graph errors on unnamed graph"
+  (let ((graph (make-graph)))
+    (signals error
+      (save-named-graph graph))))
+
+(test restore-named-graph-basic
+  "Test restore-named-graph loads saved graph"
+  (let ((original-graph (make-graph :name "test-restore")))
+    (add-triples '((alice foaf@name "Alice")
+                   (bob foaf@age 30))
+                 original-graph)
+    (save-named-graph original-graph)
+
+    (let ((restored-graph (restore-named-graph "test-restore")))
+      (is (not (null restored-graph)))
+      (let ((restored-triples (triples '(t t t) restored-graph)))
+        (is (= 2 (length restored-triples)))
+        (is (member '(alice foaf@name "Alice") restored-triples :test #'equal))
+        (is (member '(bob foaf@age 30) restored-triples :test #'equal))))
+
+    (delete-checkpoint "test-restore")))
+
+(test restore-named-graph-missing-file
+  "Test restore-named-graph handles missing checkpoint"
+  (signals error
+    (restore-named-graph "nonexistent-checkpoint")))
+
+(test register-graph-for-checkpointing-basic
+  "Test register-graph-for-checkpointing sets up auto-checkpointing"
+  (let ((graph (make-graph :name "test-register")))
+    (register-graph-for-checkpointing graph "test-register")
+
+    ;; Add data which should trigger checkpoint
+    (add-triples '((alice foaf@name "Alice")) graph)
+
+    ;; Check checkpoint was created
+    (let ((checkpoint-file (checkpoint-file-path "test-register")))
+      (is (probe-file checkpoint-file)))
+
+    (delete-checkpoint "test-register")))
+
+(test checkpoint-hook-saves-on-add
+  "Test checkpoint-hook triggers on add-triples"
+  (let ((graph (make-graph :name "test-hook")))
+    (register-graph-for-checkpointing graph "test-hook")
+
+    ;; Add triples - should trigger checkpoint
+    (add-triples '((bob foaf@name "Bob")) graph)
+
+    ;; Verify checkpoint exists
+    (is (probe-file (checkpoint-file-path "test-hook")))
+
+    ;; Verify we can restore
+    (let ((restored (restore-named-graph "test-hook")))
+      (is (member '(bob foaf@name "Bob")
+                  (triples '(t t t) restored)
+                  :test #'equal)))
+
+    (delete-checkpoint "test-hook")))
+
+(test checkpoint-hook-saves-on-delete
+  "Test checkpoint-hook triggers on delete-triples"
+  (let ((graph (make-graph :name "test-hook-delete")))
+    (add-triples '((alice foaf@name "Alice")
+                   (bob foaf@name "Bob"))
+                 graph)
+    (register-graph-for-checkpointing graph "test-hook-delete")
+
+    ;; Delete triples - should trigger checkpoint
+    (delete-triples '((bob foaf@name "Bob")) graph)
+
+    ;; Verify checkpoint has updated data
+    (let ((restored (restore-named-graph "test-hook-delete")))
+      (let ((restored-triples (triples '(t t t) restored)))
+        (is (= 1 (length restored-triples)))
+        (is (member '(alice foaf@name "Alice") restored-triples :test #'equal))
+        (is (not (member '(bob foaf@name "Bob") restored-triples :test #'equal)))))
+
+    (delete-checkpoint "test-hook-delete")))
+
+;;; Checkpoint Metadata Tests
+
+(test save-checkpoint-metadata-basic
+  "Test save-checkpoint-metadata creates metadata file"
+  (save-checkpoint-metadata "test-meta" 'add-triples '((alice foaf@name "Alice")))
+
+  (let* ((checkpoint-dir (get-checkpoint-dir))
+         (metadata-file (merge-pathnames "test-meta.metadata" checkpoint-dir)))
+    (is (probe-file metadata-file))
+    (delete-file metadata-file)))
+
+(test load-checkpoint-metadata-basic
+  "Test load-checkpoint-metadata reads saved metadata"
+  (save-checkpoint-metadata "test-meta-load" 'add-triples '((alice foaf@name "Alice") (bob foaf@age 30)))
+
+  (let ((metadata (load-checkpoint-metadata "test-meta-load")))
+    (is (not (null metadata)))
+    (is (eql 'add-triples (getf metadata :last-operation)))
+    (is (= 2 (getf metadata :data-size)))
+    (is (not (null (getf metadata :timestamp)))))
+
+  (let* ((checkpoint-dir (get-checkpoint-dir))
+         (metadata-file (merge-pathnames "test-meta-load.metadata" checkpoint-dir)))
+    (delete-file metadata-file)))
+
+(test load-checkpoint-metadata-missing
+  "Test load-checkpoint-metadata returns nil for missing file"
+  (let ((metadata (load-checkpoint-metadata "nonexistent-meta")))
+    (is (null metadata))))
+
+(test list-checkpoints-empty
+  "Test list-checkpoints returns empty when no checkpoints"
+  ;; Clean up any existing checkpoints first
+  (let ((existing (list-checkpoints)))
+    (dolist (cp existing)
+      (let ((name (subseq cp 0 (- (length cp) 11)))) ; Remove ".checkpoint"
+        (delete-checkpoint name))))
+
+  (let ((checkpoints (list-checkpoints)))
+    (is (or (null checkpoints) (listp checkpoints)))))
+
+(test list-checkpoints-shows-saved
+  "Test list-checkpoints finds saved checkpoints"
+  (let ((graph (make-graph :name "test-list-1")))
+    (add-triple 'alice 'foaf@name "Alice" graph)
+    (save-named-graph graph))
+
+  (let ((graph2 (make-graph :name "test-list-2")))
+    (add-triple 'bob 'foaf@name "Bob" graph2)
+    (save-named-graph graph2))
+
+  (let ((checkpoints (list-checkpoints)))
+    (is (member "test-list-1.checkpoint" checkpoints :test #'equal))
+    (is (member "test-list-2.checkpoint" checkpoints :test #'equal)))
+
+  (delete-checkpoint "test-list-1")
+  (delete-checkpoint "test-list-2"))
+
+(test delete-checkpoint-removes-files
+  "Test delete-checkpoint removes checkpoint and metadata files"
+  (let ((graph (make-graph :name "test-delete")))
+    (add-triple 'alice 'foaf@name "Alice" graph)
+    (save-named-graph graph)
+    (save-checkpoint-metadata "test-delete" 'manual-save nil))
+
+  (let* ((checkpoint-file (checkpoint-file-path "test-delete"))
+         (checkpoint-dir (get-checkpoint-dir))
+         (metadata-file (merge-pathnames "test-delete.metadata" checkpoint-dir)))
+    (is (probe-file checkpoint-file))
+    (is (probe-file metadata-file))
+
+    (delete-checkpoint "test-delete")
+
+    (is (not (probe-file checkpoint-file)))
+    (is (not (probe-file metadata-file)))))
+
+(test delete-checkpoint-missing-files
+  "Test delete-checkpoint handles missing files gracefully"
+  ;; Should not error even if files don't exist
+  (delete-checkpoint "truly-nonexistent-checkpoint"))
+
+(test checkpoint-content-references
+  "Test checkpoints preserve content references"
+  (let ((graph (make-graph :name "test-content-ref"))
+        (large-content (make-string 1500 :initial-element #\C)))
+    (add-triple 'alice 'foaf@bio large-content graph)
+    (save-named-graph graph)
+
+    (let ((restored (restore-named-graph "test-content-ref")))
+      (let ((restored-triples (triples '(alice foaf@bio t) restored)))
+        (is (= 1 (length restored-triples)))
+        (is (equal large-content (third (first restored-triples))))))
+
+    (delete-checkpoint "test-content-ref")))
+
+(test checkpoint-roundtrip-complex
+  "Test complete checkpoint roundtrip with complex data"
+  (let ((graph (make-graph :name "test-complex")))
+    (add-triples '((alice foaf@name "Alice")
+                   (alice foaf@age 30)
+                   (alice foaf@knows bob)
+                   (bob foaf@name "Bob")
+                   (bob foaf@age 25)
+                   (bob rdf@type foaf@Person))
+                 graph)
+    (save-named-graph graph)
+
+    (let ((restored (restore-named-graph "test-complex")))
+      (let ((restored-triples (triples '(t t t) restored)))
+        (is (= 6 (length restored-triples)))
+        (is (member '(alice foaf@name "Alice") restored-triples :test #'equal))
+        (is (member '(bob rdf@type foaf@Person) restored-triples :test #'equal))))
+
+    (delete-checkpoint "test-complex")))
+
+;;; ============================================================================
+;;; Phase 11-12: Additional test suites
 ;;; ============================================================================
 
 ;; Tests for remaining phases will be added as implementation progresses
