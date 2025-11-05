@@ -262,6 +262,68 @@
     ;; key2 should be unchanged
     (is (equal '(val3 val4) (cdr (assoc 'key2 result))))))
 
+;; Tests for add-triple
+
+(test add-triple-basic
+  "Test adding a single triple to empty graph"
+  (let ((g (make-graph)))
+    ;; Add: (John schema@name "John Doe")
+    (add-triple '(John schema@name "John Doe") g)
+    ;; SPO index should have entry
+    (let ((spo-entry (gethash 'John (graph-spo g))))
+      (is (not (null spo-entry)))
+      (is (member "John Doe" (cdr (assoc 'schema@name spo-entry)) :test #'equal)))
+    ;; OSP index should have entry
+    (let ((osp-entry (gethash "John Doe" (graph-osp g))))
+      (is (not (null osp-entry)))
+      (is (member 'schema@name (cdr (assoc 'John osp-entry)))))
+    ;; POS index should have entry
+    (let ((pos-entry (gethash 'schema@name (graph-pos g))))
+      (is (not (null pos-entry)))
+      (is (member 'John (cdr (assoc "John Doe" pos-entry)))))))
+
+(test add-triple-multiple-same-subject
+  "Test adding multiple triples with same subject"
+  (let ((g (make-graph)))
+    (add-triple '(John schema@name "John Doe") g)
+    (add-triple '(John schema@age 30) g)
+    ;; SPO should have both predicates for John
+    (let ((spo-entry (gethash 'John (graph-spo g))))
+      (is (= 2 (length spo-entry)))
+      (is (member "John Doe" (cdr (assoc 'schema@name spo-entry)) :test #'equal))
+      (is (member 30 (cdr (assoc 'schema@age spo-entry)))))))
+
+(test add-triple-normalize-rdf-type
+  "Test that rdf@type is normalized to 'a'"
+  (let ((g (make-graph)))
+    ;; Add triple with rdf@type
+    (add-triple '(John rdf@type schema@Person) g)
+    ;; Should be stored as 'a, not 'rdf@type
+    (let ((spo-entry (gethash 'John (graph-spo g))))
+      (is (not (null (assoc 'a spo-entry))))
+      (is (null (assoc 'rdf@type spo-entry)))
+      (is (member 'schema@Person (cdr (assoc 'a spo-entry)))))))
+
+(test add-triple-duplicate
+  "Test adding the same triple twice (should not duplicate)"
+  (let ((g (make-graph)))
+    (add-triple '(John schema@name "John Doe") g)
+    (add-triple '(John schema@name "John Doe") g)
+    ;; Should only have one entry
+    (let ((spo-entry (gethash 'John (graph-spo g))))
+      (is (= 1 (length (cdr (assoc 'schema@name spo-entry))))))))
+
+(test add-triple-all-indices
+  "Test that all three indices are maintained correctly"
+  (let ((g (make-graph)))
+    (add-triple '(John schema@knows Jane) g)
+    ;; Verify SPO index
+    (is (not (null (gethash 'John (graph-spo g)))))
+    ;; Verify OSP index
+    (is (not (null (gethash 'Jane (graph-osp g)))))
+    ;; Verify POS index
+    (is (not (null (gethash 'schema@knows (graph-pos g)))))))
+
 ;;; ============================================================================
 ;;; Phase 3: Hook System
 ;;; ============================================================================
