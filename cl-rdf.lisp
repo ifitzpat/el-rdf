@@ -671,3 +671,63 @@ See also: DELETE-TRIPLE, ADD-TRIPLES, GRAPH-DELETE-HOOKS"
         (graph-delete-hooks graph))
 
   nil)
+
+;;; ============================================================================
+;;;; Phase 3: Hook System
+;;; ============================================================================
+
+(defun add-hook-to-graph (graph hook-type hook-function)
+  "Add HOOK-FUNCTION to GRAPH's hooks of HOOK-TYPE.
+
+Hooks are callback functions that are triggered when certain operations occur
+on the graph. This function adds a hook to the appropriate hook list, avoiding
+duplicates.
+
+Arguments:
+  GRAPH         - A graph object (CLOS instance)
+  HOOK-TYPE     - Type of hook: :add, :delete, or :query
+  HOOK-FUNCTION - A function taking (graph operation data) as arguments
+
+Hook Types:
+  :add    - Called after ADD-TRIPLES operations
+  :delete - Called after DELETE-TRIPLES operations
+  :query  - Called during GRAPH-QUERY operations
+
+Hook Function Signature:
+  (lambda (graph operation data) ...)
+
+  Where:
+    GRAPH     - The graph being operated on
+    OPERATION - Symbol indicating the operation (e.g., 'add-triples)
+    DATA      - Operation-specific data (e.g., list of triples)
+
+Returns:
+  NIL
+
+Side Effects:
+  Modifies the graph's hook list for the specified type
+
+Examples:
+  ;; Add a logging hook
+  (add-hook-to-graph g :add
+    (lambda (graph op data)
+      (format t \"Added ~A triples~%\" (length data))))
+
+  ;; Add a checkpoint hook
+  (add-hook-to-graph g :add #'my-checkpoint-function)
+
+See also: REMOVE-HOOK-FROM-GRAPH, GET-GRAPH-HOOKS, ADD-TRIPLES, DELETE-TRIPLES"
+  (let ((hooks (ecase hook-type
+                 (:add (graph-add-hooks graph))
+                 (:delete (graph-delete-hooks graph))
+                 (:query (graph-query-hooks graph)))))
+    ;; Only add if not already present
+    (unless (member hook-function hooks)
+      (ecase hook-type
+        (:add (setf (graph-add-hooks graph)
+                    (cons hook-function (graph-add-hooks graph))))
+        (:delete (setf (graph-delete-hooks graph)
+                       (cons hook-function (graph-delete-hooks graph))))
+        (:query (setf (graph-query-hooks graph)
+                      (cons hook-function (graph-query-hooks graph)))))))
+  nil)
