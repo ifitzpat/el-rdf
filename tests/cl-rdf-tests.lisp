@@ -2826,8 +2826,104 @@ someProperty schema:label \"some property\" ." out))
         (is t))))) ; Pass test anyway
 
 ;;; ============================================================================
-;;; Phase 13: Additional test suites
+;;; Phase 13: Bidirectional Format Conversion (cl-rdf → el-rdf)
 ;;; ============================================================================
 
-;; Tests for remaining phases will be added as implementation progresses
-;; See CL-PORT-PLAN.md for complete phase breakdown
+(in-suite :conversion)
+
+;;; Symbol Conversion Tests
+
+(test convert-symbol-cl-to-elisp
+  "Test converting cl-rdf symbols to el-rdf format (@ to :)"
+  (is (eq (convert-symbol-cl-to-elisp 'foaf@name) '|foaf:name|))
+  (is (eq (convert-symbol-cl-to-elisp 'schema@Person) '|schema:Person|))
+  (is (eq (convert-symbol-cl-to-elisp 'rdf@type) '|rdf:type|))
+  ;; Symbol without @ should remain unchanged
+  (is (eq (convert-symbol-cl-to-elisp 'alice) 'alice)))
+
+(test convert-triple-cl-to-elisp
+  "Test converting cl-rdf triple to el-rdf format"
+  (let ((cl-triple '(alice foaf@name "Alice")))
+    (let ((el-triple (convert-triple-cl-to-elisp cl-triple)))
+      (is (eq (first el-triple) 'alice))
+      (is (eq (second el-triple) '|foaf:name|))
+      (is (equal (third el-triple) "Alice")))))
+
+;;; Save for el-rdf Tests
+
+(test save-for-elisp-basic
+  "Test saving graph in el-rdf format"
+  (let ((graph (make-graph))
+        (tmpfile (format nil "/tmp/cl-rdf-elisp-~A.rdf" (get-universal-time))))
+    (add-triples '((alice foaf@name "Alice")
+                   (bob foaf@age 30)
+                   (charlie rdf@type foaf@Person))
+                 graph)
+
+    (save-for-elisp graph tmpfile)
+
+    ;; Read file and verify it uses : separator
+    (let ((content (uiop:read-file-string tmpfile)))
+      (is (search "foaf:name" content))
+      (is (search "foaf:age" content))
+      (is (search "rdf:type" content))
+      ;; Should NOT have @ separator
+      (is (not (search "foaf@name" content)))
+      (is (not (search "foaf@age" content))))
+
+    (delete-file tmpfile)))
+
+(test roundtrip-cl-to-el-to-cl
+  "Test round-trip conversion: cl-rdf → el-rdf → cl-rdf"
+  (let ((graph1 (make-graph))
+        (tmpfile (format nil "/tmp/cl-rdf-roundtrip-~A.rdf" (get-universal-time))))
+    (add-triples '((alice foaf@name "Alice")
+                   (bob foaf@knows alice)
+                   (charlie schema@birthDate "1990-01-01"))
+                 graph1)
+
+    ;; Save in el-rdf format
+    (save-for-elisp graph1 tmpfile)
+
+    ;; Load back into new graph (auto-converts to cl-rdf)
+    (let ((graph2 (make-graph)))
+      (load-graph graph2 tmpfile)
+
+      ;; Should have same triples with @ separator
+      (let ((triples (triples '(t t t) graph2)))
+        (is (= 3 (length triples)))
+        (is (member '(alice foaf@name "Alice") triples :test #'equal))
+        (is (member '(bob foaf@knows alice) triples :test #'equal))
+        (is (member '(charlie schema@birthDate "1990-01-01") triples :test #'equal))))
+
+    (delete-file tmpfile)))
+
+(test save-for-elisp-with-complex-symbols
+  "Test saving symbols with multiple @ separators"
+  (let ((graph (make-graph))
+        (tmpfile (format nil "/tmp/cl-rdf-complex-~A.rdf" (get-universal-time))))
+    (add-triples '((wn30schema@seeAlso rdf@type owl@ObjectProperty)
+                   (ex@item rdfs@label "Test Item"))
+                 graph)
+
+    (save-for-elisp graph tmpfile)
+
+    (let ((content (uiop:read-file-string tmpfile)))
+      ;; Should have colons
+      (is (search "wn30schema:seeAlso" content))
+      (is (search "rdf:type" content))
+      (is (search "owl:ObjectProperty" content))
+      (is (search "rdfs:label" content)))
+
+    (delete-file tmpfile)))
+
+(test convert-symbols-preserves-literals
+  "Test that literal values are preserved during conversion"
+  (let ((triple '(alice foaf@age 30)))
+    (let ((converted (convert-triple-cl-to-elisp triple)))
+      (is (equal (third converted) 30))
+      (is (numberp (third converted))))))
+
+;;; ============================================================================
+;;; End of Test Suites
+;;; ============================================================================
