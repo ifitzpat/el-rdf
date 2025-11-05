@@ -32,18 +32,61 @@
 
 (in-suite :core)
 
-;; Tests will be added here as we implement Phase 1 functions
-;; Following TDD: write test first, then implement function
+;; Tests for Phase 1: Core Data Structures and Utilities
 
-;; Example structure for future tests:
-;;
-;; (test variablep
-;;   "Test variable predicate - identifies symbols starting with $"
-;;   (is (variablep '$subject))
-;;   (is (variablep '$name))
-;;   (is (not (variablep 'regular-symbol)))
-;;   (is (not (variablep "string")))
-;;   (is (not (variablep 42))))
+(test make-graph-basic
+  "Test basic graph creation"
+  (let ((g (make-graph)))
+    ;; Graph should be created
+    (is (not (null g)))
+    ;; Should have SPO hash table
+    (is (hash-table-p (graph-spo g)))
+    ;; Should have OSP hash table
+    (is (hash-table-p (graph-osp g)))
+    ;; Should have POS hash table
+    (is (hash-table-p (graph-pos g)))
+    ;; Hash tables should be empty initially
+    (is (zerop (hash-table-count (graph-spo g))))
+    (is (zerop (hash-table-count (graph-osp g))))
+    (is (zerop (hash-table-count (graph-pos g))))
+    ;; Name should be NIL when not provided
+    (is (null (graph-name g)))))
+
+(test make-graph-with-name
+  "Test graph creation with optional name"
+  (let ((g (make-graph :name "test-graph")))
+    (is (not (null g)))
+    (is (string= "test-graph" (graph-name g)))))
+
+(test make-graph-hooks-structure
+  "Test that graph has proper hooks structure"
+  (let ((g (make-graph)))
+    ;; Should have add-hooks accessor
+    (is (listp (graph-add-hooks g)))
+    (is (null (graph-add-hooks g)))  ; Initially empty
+    ;; Should have delete-hooks accessor
+    (is (listp (graph-delete-hooks g)))
+    (is (null (graph-delete-hooks g)))  ; Initially empty
+    ;; Should have query-hooks accessor
+    (is (listp (graph-query-hooks g)))
+    (is (null (graph-query-hooks g))))) ; Initially empty
+
+(test make-graph-prefixes
+  "Test that graph has prefixes storage"
+  (let ((g (make-graph)))
+    ;; Should have prefixes accessor
+    (is (listp (graph-prefixes g)))
+    (is (null (graph-prefixes g)))))  ; Initially empty
+
+(test make-graph-hash-table-tests
+  "Test that hash tables use correct test functions"
+  (let ((g (make-graph)))
+    ;; SPO: uses EQ test (for symbols as keys)
+    (is (eq 'eq (hash-table-test (graph-spo g))))
+    ;; OSP: uses EQUAL test (for strings/objects as keys)
+    (is (eq 'equal (hash-table-test (graph-osp g))))
+    ;; POS: uses EQ test (for symbols as keys)
+    (is (eq 'eq (hash-table-test (graph-pos g))))))
 
 ;;; ============================================================================
 ;;; Phase 2: Triple Storage
