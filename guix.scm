@@ -50,6 +50,7 @@
     (inputs
      (list sbcl-alexandria        ; Utilities library
            sbcl-bordeaux-threads  ; For threading/parallelization
+           sbcl-lparallel         ; For parallel map/reduce operations
            sbcl-ironclad))        ; For MD5 hashing (content references)
     ;; Note: uiop is included with ASDF/SBCL, no need to list it
     (home-page "https://github.com/ifitzpat/el-rdf")

@@ -932,7 +932,144 @@
       (is (= 1 (length results))))))
 
 ;;; ============================================================================
-;;; Phase 5-12: Additional test suites
+;;; Phase 5: Pattern Matching
+;;; ============================================================================
+
+(in-suite :storage)
+
+;; Tests for augmented-eq
+
+(test augmented-eq-symbols
+  "Test augmented-eq with symbols (uses EQ)"
+  (is (augmented-eq 'alice 'alice))
+  (is (not (augmented-eq 'alice 'bob)))
+  (is (augmented-eq 'foaf@name 'foaf@name)))
+
+(test augmented-eq-strings
+  "Test augmented-eq with strings (uses STRING=)"
+  (is (augmented-eq "Alice" "Alice"))
+  (is (not (augmented-eq "Alice" "Bob")))
+  (is (augmented-eq "" "")))
+
+(test augmented-eq-numbers
+  "Test augmented-eq with numbers (uses EQL)"
+  (is (augmented-eq 42 42))
+  (is (augmented-eq 3.14 3.14))
+  (is (not (augmented-eq 42 43))))
+
+(test augmented-eq-mixed-types
+  "Test augmented-eq with different types (should not match)"
+  (is (not (augmented-eq 'alice "alice")))
+  (is (not (augmented-eq 42 "42")))
+  (is (not (augmented-eq 'a 1))))
+
+;; Tests for pat-match
+
+(test pat-match-variables
+  "Test pat-match binds variables"
+  (let ((bindings (pat-match '$subject 'alice)))
+    (is (= 1 (length bindings)))
+    (is (equal '($subject . alice) (first bindings)))))
+
+(test pat-match-atoms-match
+  "Test pat-match with matching atoms"
+  (let ((bindings (pat-match 'alice 'alice)))
+    (is (member '(t . alice) bindings :test #'equal))))
+
+(test pat-match-atoms-no-match
+  "Test pat-match with non-matching atoms"
+  (let ((bindings (pat-match 'alice 'bob)))
+    (is (member '(nil . nil) bindings :test #'equal))))
+
+(test pat-match-simple-list
+  "Test pat-match with simple lists"
+  (let ((bindings (pat-match '($s $p $o) '(alice foaf@name "Alice"))))
+    (is (member '($s . alice) bindings :test #'equal))
+    (is (member '($p . foaf@name) bindings :test #'equal))
+    (is (member '($o . "Alice") bindings :test #'equal))))
+
+(test pat-match-mixed-pattern
+  "Test pat-match with concrete values and variables"
+  (let ((bindings (pat-match '($subject foaf@name $name)
+                              '(alice foaf@name "Alice"))))
+    (is (member '($subject . alice) bindings :test #'equal))
+    (is (member '($name . "Alice") bindings :test #'equal))
+    ;; foaf@name matches itself (wildcard marker)
+    (is (member '(t . foaf@name) bindings :test #'equal))))
+
+(test pat-match-no-match-predicate
+  "Test pat-match when predicate doesn't match"
+  (let ((bindings (pat-match '($subject foaf@name $name)
+                              '(alice foaf@age 30))))
+    (is (member '(nil . nil) bindings :test #'equal))))
+
+;; Tests for traverse-graph
+
+(test traverse-graph-basic
+  "Test traverse-graph returns bindings for matching triples"
+  (let* ((triples '((alice foaf@name "Alice")
+                    (bob foaf@name "Bob")
+                    (alice foaf@age 30)))
+         (bindings (traverse-graph '($subject foaf@name $name) triples)))
+    ;; Should match 2 triples (Alice and Bob's names)
+    (is (= 2 (length bindings)))
+    ;; Each binding set should have $subject and $name
+    (is (every (lambda (b)
+                 (and (assoc '$subject b)
+                      (assoc '$name b)))
+               bindings))))
+
+(test traverse-graph-no-matches
+  "Test traverse-graph with non-matching pattern"
+  (let* ((triples '((alice foaf@name "Alice")
+                    (bob foaf@name "Bob")))
+         (bindings (traverse-graph '($subject foaf@age $age) triples)))
+    (is (null bindings))))
+
+(test traverse-graph-all-variables
+  "Test traverse-graph with all variables pattern"
+  (let* ((triples '((alice foaf@name "Alice")
+                    (bob foaf@name "Bob")))
+         (bindings (traverse-graph '($s $p $o) triples)))
+    (is (= 2 (length bindings)))
+    (is (every (lambda (b)
+                 (and (assoc '$s b)
+                      (assoc '$p b)
+                      (assoc '$o b)))
+               bindings))))
+
+;; Tests for filter-triples
+
+(test filter-triples-basic
+  "Test filter-triples returns matching triples"
+  (let* ((triples '((alice foaf@name "Alice")
+                    (bob foaf@name "Bob")
+                    (alice foaf@age 30)))
+         (filtered (filter-triples '($subject foaf@name $name) triples)))
+    ;; Should return 2 triples with foaf@name predicate
+    (is (= 2 (length filtered)))
+    (is (member '(alice foaf@name "Alice") filtered :test #'equal))
+    (is (member '(bob foaf@name "Bob") filtered :test #'equal))))
+
+(test filter-triples-no-matches
+  "Test filter-triples with non-matching pattern"
+  (let* ((triples '((alice foaf@name "Alice")
+                    (bob foaf@name "Bob")))
+         (filtered (filter-triples '($subject foaf@age $age) triples)))
+    (is (null filtered))))
+
+(test filter-triples-specific-subject
+  "Test filter-triples with concrete subject"
+  (let* ((triples '((alice foaf@name "Alice")
+                    (bob foaf@name "Bob")
+                    (alice foaf@age 30)))
+         (filtered (filter-triples '(alice $p $o) triples)))
+    (is (= 2 (length filtered)))
+    (is (member '(alice foaf@name "Alice") filtered :test #'equal))
+    (is (member '(alice foaf@age 30) filtered :test #'equal))))
+
+;;; ============================================================================
+;;; Phase 6-12: Additional test suites
 ;;; ============================================================================
 
 ;; Tests for remaining phases will be added as implementation progresses

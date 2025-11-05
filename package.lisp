@@ -7,6 +7,12 @@
                 #:with-lock-held
                 #:make-thread
                 #:join-thread)
+  (:import-from #:lparallel
+                #:pmap
+                #:premove-if
+                #:*kernel*
+                #:make-kernel
+                #:end-kernel)
   (:documentation "In-memory RDF triple store for Common Lisp")
 
   ;; Core graph classes and operations

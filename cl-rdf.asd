@@ -11,6 +11,7 @@
 
   :depends-on (#:alexandria
                #:bordeaux-threads  ; For threading/parallelization
+               #:lparallel         ; For parallel map/reduce operations
                #:ironclad          ; For MD5 hashing (content references)
                #:uiop)             ; Portable pathname/filesystem operations
 
