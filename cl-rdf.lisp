@@ -15,6 +15,13 @@
 ;;; Functions are implemented in phases according to CL-PORT-PLAN.md
 
 ;;;; ============================================================================
+;;;; Special Variables
+;;;; ============================================================================
+
+(defvar *debug* nil
+  "Enable debug logging output. Set to T to enable debug messages.")
+
+;;;; ============================================================================
 ;;;; Phase 1: Core Data Structures and Utilities
 ;;;; ============================================================================
 
@@ -1126,3 +1133,454 @@ See also: TRAVERSE-GRAPH, PAT-MATCH"
         (premove-if (lambda (triple)
                       (member '(nil . nil) (pat-match pattern triple) :test #'equal))
                     triples))))
+
+;;;; ============================================================================
+;;;; Phase 6: Query Execution Engine
+;;;; ============================================================================
+
+;;; -----------------------------------------------------------------------------
+;;; Condition System
+;;; -----------------------------------------------------------------------------
+
+(define-condition query-error (error)
+  ((message
+    :initarg :message
+    :reader query-error-message
+    :documentation "Descriptive error message"))
+  (:documentation "Base condition for all query-related errors"))
+
+(define-condition pattern-match-failure (query-error)
+  ((pattern
+    :initarg :pattern
+    :reader pattern-match-failure-pattern
+    :documentation "The pattern that failed to match")
+   (graph
+    :initarg :graph
+    :reader pattern-match-failure-graph
+    :documentation "The graph that was queried"))
+  (:documentation "Signaled when a non-optional pattern matches no triples")
+  (:report (lambda (condition stream)
+             (format stream "Pattern ~A matched no triples in graph"
+                     (pattern-match-failure-pattern condition)))))
+
+(define-condition binding-conflict (query-error)
+  ((new-bindings
+    :initarg :new-bindings
+    :reader binding-conflict-new
+    :documentation "New bindings that conflict")
+   (old-bindings
+    :initarg :old-bindings
+    :reader binding-conflict-old
+    :documentation "Existing bindings"))
+  (:documentation "Signaled when variable bindings conflict")
+  (:report (lambda (condition stream)
+             (format stream "Binding conflict: new ~A incompatible with old ~A"
+                     (binding-conflict-new condition)
+                     (binding-conflict-old condition)))))
+
+;;; -----------------------------------------------------------------------------
+;;; Binding Utilities
+;;; -----------------------------------------------------------------------------
+
+(defun clean-bindings (bindings)
+  "Remove success markers (T . value) from variable bindings.
+
+BINDINGS is a list of binding sets, each containing (var . value) pairs.
+
+Returns a new list with all (T . value) pairs removed.
+
+Examples:
+  (clean-bindings '((($s . alice) (t . alice) ($p . foaf@name))))
+  => ((($s . alice) ($p . foaf@name)))
+
+See also: PAT-MATCH, UPDATE-BINDINGS"
+  (mapcar (lambda (binding-set)
+            (remove-if (lambda (pair) (eq t (car pair)))
+                       binding-set))
+          bindings))
+
+(defun compatible-bindings-p (newbindings oldbindings)
+  "Check if NEWBINDINGS are compatible with OLDBINDINGS.
+
+Two bindings are compatible if:
+  - They bind the same variable to the same value, OR
+  - They bind different variables, OR
+  - The variable is unbound in one of them
+
+Returns T if compatible, NIL if any variable has conflicting values.
+
+Arguments:
+  NEWBINDINGS - List of (var . value) pairs to check
+  OLDBINDINGS - List of existing binding sets (nested structure)
+
+Examples:
+  (compatible-bindings-p '(($s . alice)) '((($s . alice))))  => T
+  (compatible-bindings-p '(($s . alice)) '((($s . bob))))    => NIL
+  (compatible-bindings-p '(($p . foaf@name)) '((($s . alice)))) => T
+
+See also: UPDATE-BINDINGS"
+  (when *debug*
+    (log:debug "Comparing ~A with ~A" newbindings oldbindings))
+  (every #'identity
+         (mapcar (lambda (new-pair)
+                   (let ((oldval (cdr (assoc (car new-pair) (car oldbindings))))
+                         (newval (cdr new-pair)))
+                     (when *debug*
+                       (log:debug "  Variable ~A: old=~A new=~A" (car new-pair) oldval newval))
+                     (or (not oldval) (equal oldval newval))))
+                 newbindings)))
+
+(defun update-bindings (newbindings oldbindings)
+  "Merge NEWBINDINGS with OLDBINDINGS if compatible.
+
+Returns a list of merged binding sets, or NIL if bindings conflict.
+Removes duplicate bindings and success markers.
+
+Arguments:
+  NEWBINDINGS - List of new binding sets to merge
+  OLDBINDINGS - Existing binding sets
+
+Examples:
+  (update-bindings '((($p . foaf@name))) '((($s . alice))))
+  => ((($s . alice) ($p . foaf@name)))
+
+  (update-bindings '((($s . alice))) '((($s . bob))))
+  => NIL  ; Conflict
+
+See also: CLEAN-BINDINGS, COMPATIBLE-BINDINGS-P"
+  (cond
+    ((not newbindings)
+     (clean-bindings oldbindings))
+    (t
+     (mapcan (lambda (new-binding-set)
+               (if (not (compatible-bindings-p new-binding-set oldbindings))
+                   (progn
+                     (when *debug*
+                       (log:warn "Conflicting bindings: ~A and ~A"
+                                 new-binding-set oldbindings))
+                     nil)
+                 (clean-bindings
+                  (list (remove-duplicates
+                         (append new-binding-set (car oldbindings))
+                         :test #'equal)))))
+             newbindings))))
+
+;;; -----------------------------------------------------------------------------
+;;; Pattern Normalization
+;;; -----------------------------------------------------------------------------
+
+(defun normalize-pattern (pattern)
+  "Normalize rdf@type to 'a' in PATTERN for consistent matching.
+
+Only normalizes if the pattern contains NO variables, since the triples()
+function already handles equivalence by transforming results.
+
+Examples:
+  (normalize-pattern '(alice rdf@type schema@Person))
+  => (alice a schema@Person)
+
+  (normalize-pattern '($s rdf@type schema@Person))
+  => ($s rdf@type schema@Person)  ; Not normalized - has variable
+
+See also: TRIPLES"
+  (if (and (listp pattern)
+           (>= (length pattern) 3)
+           (eq (nth 1 pattern) 'rdf@type)
+           (not (var-or-wildp (nth 0 pattern)))
+           (not (var-or-wildp (nth 2 pattern))))
+      (list (nth 0 pattern) 'a (nth 2 pattern))
+    pattern))
+
+;;; -----------------------------------------------------------------------------
+;;; Optional Clause Handling
+;;; -----------------------------------------------------------------------------
+
+(defun optional-clause-p (clause)
+  "Return T if CLAUSE is an OPTIONAL clause, NIL otherwise.
+
+OPTIONAL clauses have the form: (optional PATTERN)
+
+Examples:
+  (optional-clause-p '(optional ($s foaf@name $name)))  => T
+  (optional-clause-p '($s foaf@name $name))             => NIL
+
+See also: UNWRAP-OPTIONAL"
+  (and (listp clause)
+       (eq (car clause) 'optional)))
+
+(defun unwrap-optional (clause)
+  "Extract the pattern from an OPTIONAL CLAUSE.
+
+If CLAUSE is not optional, returns it unchanged.
+
+Examples:
+  (unwrap-optional '(optional ($s foaf@name $name)))
+  => ($s foaf@name $name)
+
+  (unwrap-optional '($s foaf@name $name))
+  => ($s foaf@name $name)
+
+See also: OPTIONAL-CLAUSE-P"
+  (if (optional-clause-p clause)
+      (second clause)
+    clause))
+
+;;; -----------------------------------------------------------------------------
+;;; Binding Result Normalization
+;;; -----------------------------------------------------------------------------
+
+(defun normalize-binding-results (results)
+  "Ensure RESULTS have consistent triple-nested structure.
+
+The query engine maintains a standard structure:
+  (((bindings1)) ((bindings2)))
+
+This function normalizes any variations to match this structure.
+
+Arguments:
+  RESULTS - Query results that may need normalization
+
+Returns:
+  Results in canonical triple-nested form
+
+See also: GRAPH-QUERY"
+  ;; For now, just return results as-is
+  ;; More sophisticated normalization may be added later
+  results)
+
+;;; -----------------------------------------------------------------------------
+;;; Query Execution Helpers
+;;; -----------------------------------------------------------------------------
+
+(defun %process-first-clause (clauses graph pattern is-optional)
+  "Process first query clause with no existing bindings.
+
+This handles the initial pattern match in a query execution.
+
+Arguments:
+  CLAUSES - Full clause list (including current)
+  GRAPH - The RDF graph to query
+  PATTERN - Unwrapped pattern to match
+  IS-OPTIONAL - T if this is an optional clause
+
+Returns:
+  Binding results, wrapped appropriately for recursion
+  :NO-MATCH if pattern doesn't match and isn't optional
+
+Signals:
+  PATTERN-MATCH-FAILURE if pattern doesn't match (unless optional)
+
+See also: %GRAPH-QUERY-INTERNAL"
+  (let ((bindings (traverse-graph pattern (triples pattern graph))))
+    (when *debug*
+      (log:debug "First clause: pattern=~A bindings=~A" pattern bindings))
+    (cond
+      ;; Pattern didn't match - signal error unless optional
+      ((and (null bindings) (not is-optional))
+       (restart-case
+           (error 'pattern-match-failure
+                  :pattern pattern
+                  :graph graph
+                  :message (format nil "Pattern ~A matched no triples" pattern))
+         (use-empty-bindings ()
+           :report "Continue with empty bindings"
+           '())
+         (return-no-match ()
+           :report "Return :no-match keyword"
+           (return-from %process-first-clause :no-match))))
+      ;; More clauses to process
+      ((cdr clauses)
+       (%graph-query-internal (cdr clauses) graph
+                              (update-bindings nil (or bindings '()))))
+      ;; Single clause - wrap result for consistency
+      (t (if bindings (mapcar #'list bindings) '())))))
+
+(defun %process-multiple-branches (clauses bindings graph pattern is-optional)
+  "Process query when multiple binding branches exist.
+
+Each branch represents an independent solution path that needs to be
+followed through the remaining clauses.
+
+Arguments:
+  CLAUSES - Remaining clauses to process
+  BINDINGS - Current binding branches (multiple)
+  GRAPH - The RDF graph to query
+  PATTERN - Current pattern to match (unwrapped)
+  IS-OPTIONAL - T if current clause is optional
+
+Returns:
+  Combined results from all successful branches
+
+See also: %GRAPH-QUERY-INTERNAL"
+  (remove-if
+   #'null
+   (mapcar
+    (lambda (binding-branch)
+      (let* ((substituted-pattern (sublis binding-branch pattern))
+             (newbindings (traverse-graph substituted-pattern
+                                          (triples pattern graph)))
+             (updated-bindings (update-bindings newbindings
+                                                (list binding-branch))))
+        (when *debug*
+          (log:debug "Branch: pattern=~A new=~A updated=~A"
+                     substituted-pattern newbindings updated-bindings))
+        (if (or (not newbindings) (not updated-bindings))
+            (if is-optional
+                ;; Optional clause failed - continue with existing bindings
+                (%graph-query-internal (cdr clauses) graph (list binding-branch))
+              nil)
+          ;; Successful match - recurse with updated bindings
+          (%graph-query-internal (sublis updated-bindings (cdr clauses))
+                                 graph
+                                 updated-bindings))))
+    bindings)))
+
+(defun %process-single-branch (clauses bindings graph pattern is-optional)
+  "Process query when single binding branch exists.
+
+Arguments:
+  CLAUSES - Remaining clauses to process
+  BINDINGS - Current single binding branch
+  GRAPH - The RDF graph to query  
+  PATTERN - Current pattern to match (unwrapped)
+  IS-OPTIONAL - T if current clause is optional
+
+Returns:
+  Updated bindings after processing this clause
+
+See also: %GRAPH-QUERY-INTERNAL"
+  (let* ((substituted-pattern (sublis bindings pattern))
+         (newbindings (traverse-graph substituted-pattern
+                                      (triples pattern graph)))
+         (updated-bindings (update-bindings newbindings bindings)))
+    (when *debug*
+      (log:debug "Single branch: pattern=~A new=~A updated=~A"
+                 substituted-pattern newbindings updated-bindings))
+    (if (or (not newbindings) (not updated-bindings))
+        (if is-optional
+            ;; Optional clause failed - continue with existing bindings
+            (%graph-query-internal (cdr clauses) graph bindings)
+          nil)
+      ;; Successful match - recurse with updated bindings
+      (%graph-query-internal (sublis updated-bindings (cdr clauses))
+                             graph
+                             updated-bindings))))
+
+(defun %graph-query-internal (clauses graph &optional bindings)
+  "Core query execution engine with pattern matching and OPTIONAL support.
+
+This is the internal implementation of graph-query, handling:
+  - Pattern matching against the graph
+  - Variable binding accumulation
+  - OPTIONAL clause semantics (left-join)
+  - Multiple solution branches
+
+Arguments:
+  CLAUSES - List of patterns or (optional PATTERN) clauses
+  GRAPH - The RDF graph to query
+  BINDINGS - Current variable bindings (used in recursion)
+
+Returns:
+  Triple-nested binding structure: (((var . val) ...))
+  Or :NO-MATCH if a required pattern fails
+
+Execution Paths:
+  1. No clauses left → return current bindings (base case)
+  2. No existing bindings → process first clause
+  3. Multiple binding branches → split and process each
+  4. Single binding branch → apply pattern and recurse
+
+Examples:
+  (%graph-query-internal '(($s foaf@name $name)) graph)
+  => (((($s . alice) ($name . \"Alice\")))
+      ((($s . bob) ($name . \"Bob\"))))
+
+See also: GRAPH-QUERY, TRAVERSE-GRAPH, UPDATE-BINDINGS
+
+TODO: Nested OPTIONAL clauses not yet supported (see CL-PORT-PLAN.md)"
+  (let* ((bindings (or bindings '()))
+         (pattern (car clauses))
+         (is-optional (optional-clause-p pattern))
+         (unwrapped-pattern (if is-optional (unwrap-optional pattern) pattern)))
+    (when *debug*
+      (log:debug "Query: clauses=~A bindings-count=~A"
+                 (length clauses) (length bindings)))
+    (cond
+      ;; Base case: no more clauses or malformed pattern
+      ((or (not clauses) (< (length unwrapped-pattern) 3))
+       bindings)
+      ;; First call: no existing bindings
+      ((not bindings)
+       (%process-first-clause clauses graph unwrapped-pattern is-optional))
+      ;; Multiple binding branches: process each independently
+      ((> (length bindings) 1)
+       (%process-multiple-branches clauses bindings graph unwrapped-pattern is-optional))
+      ;; Single binding branch: apply pattern and recurse
+      (t
+       (%process-single-branch clauses bindings graph unwrapped-pattern is-optional)))))
+
+(defun graph-query (clauses graph &optional bindings)
+  "Execute a SPARQL-like query against GRAPH.
+
+Supports pattern matching with variables, multiple clauses,
+and OPTIONAL clause semantics.
+
+Arguments:
+  CLAUSES - List of triple patterns, e.g., '(($s rdf@type foaf@Person) ...)
+  GRAPH - The RDF graph to query
+  BINDINGS - Optional initial variable bindings
+
+Returns:
+  List of binding sets (triple-nested structure), or
+  :NO-MATCH if a required pattern matches no triples
+
+Signals:
+  PATTERN-MATCH-FAILURE if pattern doesn't match (caught by default handler)
+
+Default Behavior:
+  The default handler returns :NO-MATCH on pattern-match-failure.
+  Callers can override by establishing their own handler.
+
+Variable Syntax:
+  Variables start with $ (e.g., $subject, $name)
+
+Examples:
+  ;; Single clause
+  (graph-query '(($s foaf@name $name)) graph)
+  => (((($s . alice) ($name . \"Alice\")))
+      ((($s . bob) ($name . \"Bob\"))))
+
+  ;; Multiple clauses (join)
+  (graph-query '(($s foaf@name $name)
+                 ($s foaf@age $age))
+               graph)
+  => (((($s . alice) ($name . \"Alice\") ($age . 30))))
+
+  ;; OPTIONAL clause (left-join)
+  (graph-query '(($s foaf@name $name)
+                 (optional ($s foaf@age $age)))
+               graph)
+  => Results include entries without age if not present
+
+Hooks:
+  Calls all registered query-hooks before processing
+
+See also: WHERE (alias), ASK, SELECT, CONSTRUCT, FILTER"
+  ;; Call query hooks before processing
+  (let ((query-hooks (graph-query-hooks graph)))
+    (mapc (lambda (hook) (funcall hook graph 'graph-query clauses))
+          query-hooks))
+  ;; Execute with default error handler
+  (handler-bind ((pattern-match-failure
+                   (lambda (condition)
+                     (when *debug*
+                       (log:warn "Pattern match failure: ~A" condition))
+                     ;; Default behavior: return :no-match
+                     (invoke-restart 'return-no-match))))
+    (let ((raw-results (%graph-query-internal clauses graph bindings)))
+      (if (and raw-results (not (eq raw-results :no-match)))
+          (normalize-binding-results raw-results)
+        raw-results))))
+
+;; Alias for compatibility
+(setf (fdefinition 'where) #'graph-query)
