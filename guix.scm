@@ -52,7 +52,8 @@
            sbcl-bordeaux-threads  ; For threading/parallelization
            sbcl-lparallel         ; For parallel map/reduce operations
            sbcl-ironclad          ; For MD5 hashing (content references)
-           sbcl-log4cl))          ; Logging framework
+           sbcl-log4cl            ; Logging framework
+           sbcl-cl-ppcre))        ; Regular expressions (format conversion)
     ;; Note: uiop is included with ASDF/SBCL, no need to list it
     (home-page "https://github.com/ifitzpat/el-rdf")
     (synopsis "In-memory RDF triple store for Common Lisp")

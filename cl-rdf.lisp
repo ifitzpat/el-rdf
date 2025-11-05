@@ -2273,6 +2273,9 @@ Reads serialized triples and auto-detects format:
 - If el-rdf format (namespace:resource) detected, converts to cl-rdf
 - If cl-rdf format (namespace@resource), loads directly
 
+Pre-processes el-rdf format by replacing : with @ before reading,
+since CL reader interprets foo:bar as package:symbol.
+
 Arguments:
   GRAPH - The graph to load into
   FILENAME - Path to input file
@@ -2282,7 +2285,11 @@ Side Effects:
 
 Examples:
   (load-graph my-graph \"/tmp/data.rdf\")"
-  (with-open-file (in filename :direction :input)
-    (let* ((triples (read in))
-           (converted-triples (mapcar #'convert-triple-el-to-cl triples)))
-      (add-triples converted-triples graph))))
+  (let* ((content (uiop:read-file-string filename))
+         ;; Pre-process: replace : with @ to avoid package issues
+         ;; This handles el-rdf format conversion before reading
+         (processed (cl-ppcre:regex-replace-all "([a-zA-Z0-9_-]+):([a-zA-Z0-9_#-]+)"
+                                                 content
+                                                 "\\1@\\2"))
+         (triples (read-from-string processed)))
+    (add-triples triples graph)))
