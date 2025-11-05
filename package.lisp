@@ -14,8 +14,6 @@
                 #:make-kernel
                 #:end-kernel)
   (:import-from #:log4cl)
-  (:import-from #:hunchentoot)
-  (:import-from #:drakma)
   (:documentation "In-memory RDF triple store for Common Lisp")
 
   ;; Core graph classes and operations

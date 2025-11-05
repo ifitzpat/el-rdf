@@ -15,13 +15,54 @@
                #:ironclad          ; For MD5 hashing (content references)
                #:log4cl            ; Logging framework
                #:cl-ppcre          ; Regular expressions (TTL import)
-               #:hunchentoot       ; HTTP server
-               #:drakma            ; HTTP client
                #:uiop)             ; Portable pathname/filesystem operations
 
   :components ((:file "package")
-               (:file "cl-rdf" :depends-on ("package"))
-               (:file "http-server" :depends-on ("package" "cl-rdf")))
+               (:file "cl-rdf" :depends-on ("package")))
+
+  :in-order-to ((test-op (test-op #:cl-rdf/tests))))
+
+
+;;; ============================================================================
+;;; HTTP Server (Optional)
+;;; ============================================================================
+;;;
+;;; This system provides HTTP server and remote graph functionality.
+;;; It is separate from the core system to avoid mandatory dependencies
+;;; on hunchentoot and drakma.
+;;;
+;;; Usage:
+;;;   (ql:quickload :cl-rdf/http)  ; Loads :cl-rdf plus HTTP features
+;;;
+;;; Features:
+;;;   - HTTP API with Hunchentoot
+;;;   - Bearer token authentication
+;;;   - S-expression protocol (application/sexp)
+;;;   - remote-graph class for accessing graphs over HTTP
+;;;
+;;; Example:
+;;;   ;; Server side
+;;;   (cl-rdf:register-graph-for-http "my-graph" graph)
+;;;   (cl-rdf:start-server :port 8080 :token "secret")
+;;;
+;;;   ;; Client side
+;;;   (defvar *remote* (cl-rdf:make-remote-graph
+;;;                      :url "http://localhost:8080"
+;;;                      :graph-name "my-graph"
+;;;                      :token "secret"))
+;;;   (cl-rdf:triples '(alice t t) *remote*)
+
+(asdf:defsystem #:cl-rdf/http
+  :description "HTTP server and remote graph for cl-rdf"
+  :author "Ian FitzPatrick <ian@ianfitzpatrick.eu>"
+  :license "GPLv3"
+  :version "0.3.0"
+
+  :depends-on (#:cl-rdf
+               #:hunchentoot       ; HTTP server
+               #:drakma)           ; HTTP client
+
+  :components ((:file "http-server"))
 
   :in-order-to ((test-op (test-op #:cl-rdf/tests))))
 
@@ -66,14 +107,11 @@
                #:ironclad
                #:log4cl
                #:cl-ppcre
-               #:hunchentoot
-               #:drakma
                #:uiop)
 
   ;; Use same source code as main system
   :components ((:file "package")
-               (:file "cl-rdf" :depends-on ("package"))
-               (:file "http-server" :depends-on ("package" "cl-rdf")))
+               (:file "cl-rdf" :depends-on ("package")))
 
   ;; Apply aggressive optimization settings during compilation
   :around-compile (lambda (next)
