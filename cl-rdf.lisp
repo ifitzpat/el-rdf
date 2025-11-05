@@ -129,3 +129,28 @@ See also: VAR-OR-WILDP, GRAPH-QUERY"
        (let ((name (symbol-name x)))
          (and (plusp (length name))
               (char= (char name 0) #\$)))))
+
+(defun var-or-wildp (x)
+  "Return T if X is a variable or wildcard (t).
+
+A wildcard (the symbol T) matches any value in query patterns without
+binding. Variables (symbols starting with $) match any value and create
+bindings. This predicate is used in pattern matching to determine if a
+pattern element should match any value.
+
+Arguments:
+  X - Any Lisp object to test.
+
+Returns:
+  T if X is either the symbol T or a variable (starts with $), NIL otherwise.
+
+Examples:
+  (var-or-wildp t)              ; => T (wildcard)
+  (var-or-wildp '$subject)      ; => T (variable)
+  (var-or-wildp '$name)         ; => T (variable)
+  (var-or-wildp 'schema.Person) ; => NIL (concrete value)
+  (var-or-wildp \"string\")       ; => NIL (not a symbol)
+
+See also: VARIABLEP, PAT-MATCH, TRIPLES"
+  (or (eq x t)
+      (variablep x)))
