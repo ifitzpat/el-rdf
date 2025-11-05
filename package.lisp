@@ -2,6 +2,12 @@
 
 (defpackage #:cl-rdf
   (:use #:cl #:alexandria)
+  (:import-from #:bordeaux-threads
+                #:make-lock
+                #:with-lock-held
+                #:make-thread
+                #:join-thread
+                #:cpu-count)
   (:documentation "In-memory RDF triple store for Common Lisp")
 
   ;; Core graph operations

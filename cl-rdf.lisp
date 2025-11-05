@@ -65,7 +65,7 @@
     :documentation "Optional name for checkpointing and identification")
 
    (lock
-    :initform (bt:make-lock "graph-lock")
+    :initform (make-lock "graph-lock")
     :reader graph-lock
     :documentation "Mutex for thread-safe operations on graph indices"))
   (:documentation "RDF graph with triple-indexed storage (SPO, OSP, POS).
@@ -357,7 +357,7 @@ See also: ADD-TRIPLES, DELETE-TRIPLE, TRIPLES"
          (pos (graph-pos graph)))
 
     ;; Thread-safe update of all three indices
-    (bt:with-lock-held ((graph-lock graph))
+    (with-lock-held ((graph-lock graph))
       ;; Update SPO index: subject -> ((predicate . (objects...)))
       (let ((po (gethash subject spo)))
         (if po
@@ -416,7 +416,7 @@ See also: ADD-TRIPLE, DELETE-TRIPLES, TRIPLES"
          (pos (graph-pos graph)))
 
     ;; Thread-safe update of all three indices
-    (bt:with-lock-held ((graph-lock graph))
+    (with-lock-held ((graph-lock graph))
       ;; Remove from SPO index: subject -> ((predicate . (objects...)))
       (let ((po (gethash subject spo)))
         (when po
@@ -499,7 +499,7 @@ See also: TRIPLES, RAW-TRIPLES"
                                   (:osp  (list key value element))      ; OSP
                                   (:pos  (list value element key)))))   ; POS
       ;; Large dataset - parallel processing
-      (let* ((num-threads (min (bt:cpu-count) 4))  ; Cap at 4 threads
+      (let* ((num-threads (min (cpu-count) 4))  ; Cap at 4 threads
              (chunk-size (ceiling (/ (length duals) num-threads)))
              (chunks (loop for i from 0 below (length duals) by chunk-size
                            collect (subseq duals i (min (+ i chunk-size) (length duals)))))
@@ -510,7 +510,7 @@ See also: TRIPLES, RAW-TRIPLES"
           (let ((c chunk)  ; Capture chunk by value
                 (elem element)
                 (reord reorder))
-            (push (bt:make-thread
+            (push (make-thread
                    (lambda ()
                      (loop for (key . values) in c
                            nconc (loop for value in values
@@ -522,7 +522,7 @@ See also: TRIPLES, RAW-TRIPLES"
                   threads)))
         ;; Join threads and collect results
         (dolist (thread (reverse threads))
-          (push (bt:join-thread thread) results))
+          (push (join-thread thread) results))
         ;; Flatten results
         (apply #'append (reverse results)))))
 
@@ -577,7 +577,7 @@ See also: ADD-TRIPLE, DELETE-TRIPLES, GRAPH-ADD-HOOKS"
       ;; Small dataset - sequential processing
       (mapc (lambda (triple) (add-triple triple graph)) triplist)
       ;; Large dataset - parallel processing
-      (let* ((num-threads (min (bt:cpu-count) 4))  ; Cap at 4 threads
+      (let* ((num-threads (min (cpu-count) 4))  ; Cap at 4 threads
              (chunk-size (ceiling (/ (length triplist) num-threads)))
              (chunks (loop for i from 0 below (length triplist) by chunk-size
                            collect (subseq triplist i (min (+ i chunk-size) (length triplist)))))
@@ -586,13 +586,13 @@ See also: ADD-TRIPLE, DELETE-TRIPLES, GRAPH-ADD-HOOKS"
         (dolist (chunk chunks)
           (let ((c chunk)  ; Capture chunk by value
                 (g graph))
-            (push (bt:make-thread
+            (push (make-thread
                    (lambda ()
                      (mapc (lambda (triple) (add-triple triple g)) c))
                    :name "add-triples-worker")
                   threads)))
         ;; Wait for all additions to complete before calling hooks
-        (mapc #'bt:join-thread threads)))
+        (mapc #'join-thread threads)))
 
   ;; Call all add-hooks AFTER all triples are added
   (mapc (lambda (hook)
@@ -648,7 +648,7 @@ See also: DELETE-TRIPLE, ADD-TRIPLES, GRAPH-DELETE-HOOKS"
       ;; Small dataset - sequential processing
       (mapc (lambda (triple) (delete-triple triple graph)) triplist)
       ;; Large dataset - parallel processing
-      (let* ((num-threads (min (bt:cpu-count) 4))  ; Cap at 4 threads
+      (let* ((num-threads (min (cpu-count) 4))  ; Cap at 4 threads
              (chunk-size (ceiling (/ (length triplist) num-threads)))
              (chunks (loop for i from 0 below (length triplist) by chunk-size
                            collect (subseq triplist i (min (+ i chunk-size) (length triplist)))))
@@ -657,13 +657,13 @@ See also: DELETE-TRIPLE, ADD-TRIPLES, GRAPH-DELETE-HOOKS"
         (dolist (chunk chunks)
           (let ((c chunk)  ; Capture chunk by value
                 (g graph))
-            (push (bt:make-thread
+            (push (make-thread
                    (lambda ()
                      (mapc (lambda (triple) (delete-triple triple g)) c))
                    :name "delete-triples-worker")
                   threads)))
         ;; Wait for all deletions to complete before calling hooks
-        (mapc #'bt:join-thread threads)))
+        (mapc #'join-thread threads)))
 
   ;; Call all delete-hooks AFTER all triples are deleted
   (mapc (lambda (hook)
