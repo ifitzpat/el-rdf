@@ -99,3 +99,33 @@ Examples:
 
 See also: ADD-TRIPLE, GRAPH-QUERY, REGISTER-GRAPH-FOR-CHECKPOINTING"
   (make-instance 'graph :name name))
+
+;;; -----------------------------------------------------------------------------
+;;; Basic Predicates
+;;; -----------------------------------------------------------------------------
+
+(defun variablep (x)
+  "Return T if X is a SPARQL variable (symbol starting with $).
+
+Variables are used in query patterns to match any value and capture bindings.
+A symbol is considered a variable if its name begins with the $ character.
+
+Arguments:
+  X - Any Lisp object to test.
+
+Returns:
+  T if X is a symbol whose name starts with $, NIL otherwise.
+
+Examples:
+  (variablep '$subject)        ; => T
+  (variablep '$name)           ; => T
+  (variablep '$)               ; => T (just $ is a variable)
+  (variablep 'schema.Person)   ; => NIL
+  (variablep \"string\")         ; => NIL
+  (variablep 42)               ; => NIL
+
+See also: VAR-OR-WILDP, GRAPH-QUERY"
+  (and (symbolp x)
+       (let ((name (symbol-name x)))
+         (and (plusp (length name))
+              (char= (char name 0) #\$)))))
