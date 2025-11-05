@@ -70,23 +70,6 @@
                (:file "cl-rdf" :depends-on ("package")))
 
   ;; Apply aggressive optimization settings during compilation
-  #+sbcl
-  :around-compile (lambda (next)
-                    (proclaim '(optimize (speed 3) (safety 1) (debug 1) (space 0)))
-                    (funcall next))
-
-  #+ccl
-  :around-compile (lambda (next)
-                    (proclaim '(optimize (speed 3) (safety 1) (debug 1) (space 0)))
-                    (funcall next))
-
-  #+ecl
-  :around-compile (lambda (next)
-                    (proclaim '(optimize (speed 3) (safety 1) (debug 1) (space 0)))
-                    (funcall next))
-
-  ;; Other implementations - add as needed
-  #-(or sbcl ccl ecl)
   :around-compile (lambda (next)
                     (proclaim '(optimize (speed 3) (safety 1) (debug 1) (space 0)))
                     (funcall next))
