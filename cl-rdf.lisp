@@ -180,4 +180,4 @@ Examples:
     (add-triple g person 'schema.name \"John Doe\"))
 
 See also: ADD-TRIPLE, IMPORT-TTL"
-  (intern (format nil \"_:~A\" (gensym))))
+  (intern (format nil \"_:~A\" (symbol-name (gensym)))))
