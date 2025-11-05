@@ -48,8 +48,9 @@
     (native-inputs
      (list sbcl-fiveam))  ; Testing framework
     (inputs
-     (list sbcl-alexandria   ; Utilities library
-           sbcl-ironclad))   ; For MD5 hashing (content references)
+     (list sbcl-alexandria        ; Utilities library
+           sbcl-bordeaux-threads  ; For threading/parallelization
+           sbcl-ironclad))        ; For MD5 hashing (content references)
     ;; Note: uiop is included with ASDF/SBCL, no need to list it
     (home-page "https://github.com/ifitzpat/el-rdf")
     (synopsis "In-memory RDF triple store for Common Lisp")
@@ -70,7 +71,7 @@ Features:
 @item Graph visualization via Graphviz
 @end itemize
 
-cl-rdf uses period separators for RDF resources (namespace.resource)
+cl-rdf uses at-sign separators for RDF resources (namespace@resource)
 to avoid conflicts with Common Lisp package syntax and SPARQL 1.1
 property path operators.")
     (license license:gpl3+)))

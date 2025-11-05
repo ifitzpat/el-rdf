@@ -62,7 +62,12 @@
     :initarg :name
     :initform nil
     :accessor graph-name
-    :documentation "Optional name for checkpointing and identification"))
+    :documentation "Optional name for checkpointing and identification")
+
+   (lock
+    :initform (bt:make-lock "graph-lock")
+    :reader graph-lock
+    :documentation "Mutex for thread-safe operations on graph indices"))
   (:documentation "RDF graph with triple-indexed storage (SPO, OSP, POS).
 
 The graph uses three hash table indices for efficient querying:
@@ -351,23 +356,25 @@ See also: ADD-TRIPLES, DELETE-TRIPLE, TRIPLES"
          (osp (graph-osp graph))
          (pos (graph-pos graph)))
 
-    ;; Update SPO index: subject -> ((predicate . (objects...)))
-    (let ((po (gethash subject spo)))
-      (if po
-          (setf (gethash subject spo) (update-dual predicate object po))
-          (setf (gethash subject spo) `((,predicate . ,(list object))))))
+    ;; Thread-safe update of all three indices
+    (bt:with-lock-held ((graph-lock graph))
+      ;; Update SPO index: subject -> ((predicate . (objects...)))
+      (let ((po (gethash subject spo)))
+        (if po
+            (setf (gethash subject spo) (update-dual predicate object po))
+            (setf (gethash subject spo) `((,predicate . ,(list object))))))
 
-    ;; Update OSP index: object -> ((subject . (predicates...)))
-    (let ((sp (gethash object osp)))
-      (if sp
-          (setf (gethash object osp) (update-dual subject predicate sp))
-          (setf (gethash object osp) `((,subject . ,(list predicate))))))
+      ;; Update OSP index: object -> ((subject . (predicates...)))
+      (let ((sp (gethash object osp)))
+        (if sp
+            (setf (gethash object osp) (update-dual subject predicate sp))
+            (setf (gethash object osp) `((,subject . ,(list predicate))))))
 
-    ;; Update POS index: predicate -> ((object . (subjects...)))
-    (let ((os (gethash predicate pos)))
-      (if os
-          (setf (gethash predicate pos) (update-dual object subject os))
-          (setf (gethash predicate pos) `((,object . ,(list subject)))))))
+      ;; Update POS index: predicate -> ((object . (subjects...)))
+      (let ((os (gethash predicate pos)))
+        (if os
+            (setf (gethash predicate pos) (update-dual object subject os))
+            (setf (gethash predicate pos) `((,object . ,(list subject))))))))
 
   nil)
 
@@ -408,32 +415,34 @@ See also: ADD-TRIPLE, DELETE-TRIPLES, TRIPLES"
          (osp (graph-osp graph))
          (pos (graph-pos graph)))
 
-    ;; Remove from SPO index: subject -> ((predicate . (objects...)))
-    (let ((po (gethash subject spo)))
-      (when po
-        (let ((updated-po (remove-dual predicate object po)))
-          (if updated-po
-              (setf (gethash subject spo) updated-po)
-              ;; No predicates left for this subject - remove entirely
-              (remhash subject spo)))))
+    ;; Thread-safe update of all three indices
+    (bt:with-lock-held ((graph-lock graph))
+      ;; Remove from SPO index: subject -> ((predicate . (objects...)))
+      (let ((po (gethash subject spo)))
+        (when po
+          (let ((updated-po (remove-dual predicate object po)))
+            (if updated-po
+                (setf (gethash subject spo) updated-po)
+                ;; No predicates left for this subject - remove entirely
+                (remhash subject spo)))))
 
-    ;; Remove from OSP index: object -> ((subject . (predicates...)))
-    (let ((sp (gethash object osp)))
-      (when sp
-        (let ((updated-sp (remove-dual subject predicate sp)))
-          (if updated-sp
-              (setf (gethash object osp) updated-sp)
-              ;; No subjects left for this object - remove entirely
-              (remhash object osp)))))
+      ;; Remove from OSP index: object -> ((subject . (predicates...)))
+      (let ((sp (gethash object osp)))
+        (when sp
+          (let ((updated-sp (remove-dual subject predicate sp)))
+            (if updated-sp
+                (setf (gethash object osp) updated-sp)
+                ;; No subjects left for this object - remove entirely
+                (remhash object osp)))))
 
-    ;; Remove from POS index: predicate -> ((object . (subjects...)))
-    (let ((os (gethash predicate pos)))
-      (when os
-        (let ((updated-os (remove-dual object subject os)))
-          (if updated-os
-              (setf (gethash predicate pos) updated-os)
-              ;; No objects left for this predicate - remove entirely
-              (remhash predicate pos))))))
+      ;; Remove from POS index: predicate -> ((object . (subjects...)))
+      (let ((os (gethash predicate pos)))
+        (when os
+          (let ((updated-os (remove-dual object subject os)))
+            (if updated-os
+                (setf (gethash predicate pos) updated-os)
+                ;; No objects left for this predicate - remove entirely
+                (remhash predicate pos)))))))
 
   nil)
 
@@ -447,6 +456,9 @@ See also: ADD-TRIPLE, DELETE-TRIPLES, TRIPLES"
 This function converts the internal alist representation used in the triple
 indices into a flat list of triples. The REORDER parameter determines the
 order of elements in each triple.
+
+For large datasets (100+ entries), this function uses parallel processing
+across multiple threads to improve performance.
 
 Arguments:
   DUALS   - Alist structure: ((key . (val1 val2 ...)) ...)
@@ -477,12 +489,39 @@ Examples:
   ; => ((John a schema@Person) (Jane a schema@Person))
 
 See also: TRIPLES, RAW-TRIPLES"
-  (loop for (key . values) in duals
-        nconc (loop for value in values
-                    collect (ecase reorder
-                              ((nil) (list element key value))      ; SPO
-                              (:osp  (list key value element))      ; OSP
-                              (:pos  (list value element key))))))  ; POS
+  ;; Use threading for large datasets (threshold: 100+ entries)
+  (if (< (length duals) 100)
+      ;; Small dataset - sequential processing
+      (loop for (key . values) in duals
+            nconc (loop for value in values
+                        collect (ecase reorder
+                                  ((nil) (list element key value))      ; SPO
+                                  (:osp  (list key value element))      ; OSP
+                                  (:pos  (list value element key)))))   ; POS
+      ;; Large dataset - parallel processing
+      (let* ((num-threads (min (bt:cpu-count) 4))  ; Cap at 4 threads
+             (chunk-size (ceiling (/ (length duals) num-threads)))
+             (chunks (loop for i from 0 below (length duals) by chunk-size
+                           collect (subseq duals i (min (+ i chunk-size) (length duals)))))
+             (results nil)
+             (threads nil))
+        ;; Spawn threads to process chunks in parallel
+        (dolist (chunk chunks)
+          (push (bt:make-thread
+                 (lambda ()
+                   (loop for (key . values) in chunk
+                         nconc (loop for value in values
+                                     collect (ecase reorder
+                                               ((nil) (list element key value))
+                                               (:osp  (list key value element))
+                                               (:pos  (list value element key))))))
+                 :name "expand-duals-worker")
+                threads))
+        ;; Join threads and collect results
+        (dolist (thread (reverse threads))
+          (push (bt:join-thread thread) results))
+        ;; Flatten results
+        (apply #'append (reverse results)))))
 
 ;;; -----------------------------------------------------------------------------
 ;;; Bulk Triple Operations (with hooks)
@@ -495,6 +534,10 @@ This is a bulk operation that adds multiple triples and then triggers all
 registered add-hooks. Unlike ADD-TRIPLE (which does NOT trigger hooks),
 ADD-TRIPLES is the primary way to add data when hooks need to be notified.
 
+For large datasets (100+ triples), this function uses parallel processing
+across multiple threads to improve performance. Each ADD-TRIPLE call is
+thread-safe via the graph's mutex.
+
 Arguments:
   TRIPLIST - List of triples, where each triple is (subject predicate object)
   GRAPH    - A graph object (CLOS instance)
@@ -503,7 +546,7 @@ Returns:
   NIL (modifies graph in place)
 
 Side Effects:
-  - Calls ADD-TRIPLE for each triple in TRIPLIST
+  - Calls ADD-TRIPLE for each triple in TRIPLIST (in parallel for large datasets)
   - Calls all registered add-hooks with (graph 'add-triples triplist)
 
 Hook Protocol:
@@ -526,10 +569,27 @@ Examples:
   ; Prints: \"Added 1 triples\"
 
 See also: ADD-TRIPLE, DELETE-TRIPLES, GRAPH-ADD-HOOKS"
-  ;; Add all triples
-  (mapc (lambda (triple) (add-triple triple graph)) triplist)
+  ;; Add all triples (with threading for large datasets)
+  (if (< (length triplist) 100)
+      ;; Small dataset - sequential processing
+      (mapc (lambda (triple) (add-triple triple graph)) triplist)
+      ;; Large dataset - parallel processing
+      (let* ((num-threads (min (bt:cpu-count) 4))  ; Cap at 4 threads
+             (chunk-size (ceiling (/ (length triplist) num-threads)))
+             (chunks (loop for i from 0 below (length triplist) by chunk-size
+                           collect (subseq triplist i (min (+ i chunk-size) (length triplist)))))
+             (threads nil))
+        ;; Spawn threads to add triples in parallel
+        (dolist (chunk chunks)
+          (push (bt:make-thread
+                 (lambda ()
+                   (mapc (lambda (triple) (add-triple triple graph)) chunk))
+                 :name "add-triples-worker")
+                threads))
+        ;; Wait for all additions to complete before calling hooks
+        (mapc #'bt:join-thread threads)))
 
-  ;; Call all add-hooks
+  ;; Call all add-hooks AFTER all triples are added
   (mapc (lambda (hook)
           (funcall hook graph 'add-triples triplist))
         (graph-add-hooks graph))
@@ -543,6 +603,10 @@ This is a bulk operation that deletes multiple triples and then triggers all
 registered delete-hooks. Unlike DELETE-TRIPLE (which does NOT trigger hooks),
 DELETE-TRIPLES is the primary way to remove data when hooks need to be notified.
 
+For large datasets (100+ triples), this function uses parallel processing
+across multiple threads to improve performance. Each DELETE-TRIPLE call is
+thread-safe via the graph's mutex.
+
 Arguments:
   TRIPLIST - List of triples, where each triple is (subject predicate object)
   GRAPH    - A graph object (CLOS instance)
@@ -551,7 +615,7 @@ Returns:
   NIL (modifies graph in place)
 
 Side Effects:
-  - Calls DELETE-TRIPLE for each triple in TRIPLIST
+  - Calls DELETE-TRIPLE for each triple in TRIPLIST (in parallel for large datasets)
   - Calls all registered delete-hooks with (graph 'delete-triples triplist)
 
 Hook Protocol:
@@ -574,10 +638,27 @@ Examples:
   ; Prints: \"Deleted 1 triples\"
 
 See also: DELETE-TRIPLE, ADD-TRIPLES, GRAPH-DELETE-HOOKS"
-  ;; Delete all triples
-  (mapc (lambda (triple) (delete-triple triple graph)) triplist)
+  ;; Delete all triples (with threading for large datasets)
+  (if (< (length triplist) 100)
+      ;; Small dataset - sequential processing
+      (mapc (lambda (triple) (delete-triple triple graph)) triplist)
+      ;; Large dataset - parallel processing
+      (let* ((num-threads (min (bt:cpu-count) 4))  ; Cap at 4 threads
+             (chunk-size (ceiling (/ (length triplist) num-threads)))
+             (chunks (loop for i from 0 below (length triplist) by chunk-size
+                           collect (subseq triplist i (min (+ i chunk-size) (length triplist)))))
+             (threads nil))
+        ;; Spawn threads to delete triples in parallel
+        (dolist (chunk chunks)
+          (push (bt:make-thread
+                 (lambda ()
+                   (mapc (lambda (triple) (delete-triple triple graph)) chunk))
+                 :name "delete-triples-worker")
+                threads))
+        ;; Wait for all deletions to complete before calling hooks
+        (mapc #'bt:join-thread threads)))
 
-  ;; Call all delete-hooks
+  ;; Call all delete-hooks AFTER all triples are deleted
   (mapc (lambda (hook)
           (funcall hook graph 'delete-triples triplist))
         (graph-delete-hooks graph))

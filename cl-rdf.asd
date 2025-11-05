@@ -10,8 +10,9 @@
   :source-control (:git "https://github.com/ifitzpat/el-rdf.git")
 
   :depends-on (#:alexandria
-               #:ironclad    ; For MD5 hashing (content references)
-               #:uiop)       ; Portable pathname/filesystem operations
+               #:bordeaux-threads  ; For threading/parallelization
+               #:ironclad          ; For MD5 hashing (content references)
+               #:uiop)             ; Portable pathname/filesystem operations
 
   :components ((:file "package")
                (:file "cl-rdf" :depends-on ("package")))
