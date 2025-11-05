@@ -891,11 +891,23 @@ git commit -m "Implement function-name with tests"
 - `remove-hook-from-graph` - Remove hook function from graph's hook list
 - `get-graph-hooks` - Get all hooks of a specific type
 
+✅ **Phase 4: Triple Retrieval** (2/2 functions)
+- `triples` - Main query function with index selection (SPO/POS/OSP/universal)
+- `raw-triples` - Query without resolving content references (for checkpointing)
+- `transform-a-results-to-rdf-type` - Helper for rdf@type/a equivalence
+
+**Implementation Notes**:
+- Proper index selection based on concrete pattern elements
+- Handles rdf@type/a equivalence correctly
+- Currently identical (content references in Phase 8)
+- 10 comprehensive test cases covering all query patterns
+
 ### Current Phase
 
-🔄 **Phase 4: Triple Retrieval** (0/2 functions)
-- `triples` - Main query function
-- `raw-triples` - Query without resolving content references
+🔄 **Phase 5: Pattern Matching** (0/3 functions)
+- `augmented-eq` - Equality that handles strings/numbers
+- `pat-match` - Pattern matching against input
+- `traverse-graph` / `filter-triples` - Graph traversal
 
 ## Next Steps
 
@@ -909,7 +921,8 @@ git commit -m "Implement function-name with tests"
 8. ✅ Complete Phase 1: Core utilities (5/5)
 9. ✅ Complete Phase 2: Triple Storage + Threading (7/7)
 10. ✅ Complete Phase 3: Hook System (3/3)
-11. 🔄 Begin Phase 4: Triple Retrieval
+11. ✅ Complete Phase 4: Triple Retrieval (2/2)
+12. 🔄 Begin Phase 5: Pattern Matching
 
 ---
 

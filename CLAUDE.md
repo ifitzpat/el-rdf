@@ -135,6 +135,78 @@ This will get the user's attention. Use this when you're blocked and need direct
    - Multi-clause query evaluation where clauses are independent
    - Note: Simple predicates and utilities likely won't benefit from threading
 
+### Common Lisp Coding Style for cl-rdf
+
+**CRITICAL**: To maintain code readability, prevent parenthesis errors, and improve reasoning about code:
+
+1. **Maximum Function Length: 25 lines**
+   - Keep `defun`, `defmethod`, and `defgeneric` bodies to 25 lines or less
+   - Count only the body lines (excluding docstrings, comments, and blank lines)
+   - When a function exceeds this limit, refactor into smaller utility functions
+
+2. **Breaking Up Large Functions**
+   - Extract logical blocks into named helper functions
+   - Use descriptive names for utility functions (e.g., `%process-spo-index`, `%collect-results`)
+   - Prefix internal utilities with `%` or keep them in a separate internal section
+   - Each utility should have a single, clear purpose
+
+3. **Benefits**
+   - Easier to spot parenthesis errors
+   - Simpler to test individual components
+   - More maintainable and easier to understand
+   - Reduces cognitive load when reading code
+
+**Example - Before (too long, ~40 lines):**
+```lisp
+(defmethod triples (pattern (graph local-graph))
+  (let ((s (first pattern))
+        (p (second pattern))
+        (o (third pattern)))
+    (let ((raw-results
+           (cond
+             ((not (var-or-wildp s))
+              (let ((results (expand-duals (gethash s (graph-spo graph)) s)))
+                (if (eq p 'rdf@type)
+                    (transform-a-results-to-rdf-type results)
+                    results)))
+             ((not (var-or-wildp p))
+              (if (eq p 'rdf@type)
+                  (let ((a-results (expand-duals (gethash 'a (graph-pos graph)) 'a 'pos)))
+                    (transform-a-results-to-rdf-type a-results))
+                  (expand-duals (gethash p (graph-pos graph)) p 'pos)))
+             ;; ... more complex logic ...
+             )))
+      raw-results)))
+```
+
+**Example - After (refactored with utilities, <25 lines each):**
+```lisp
+(defun %query-by-subject (s p graph)
+  "Helper: Query SPO index by subject"
+  (let ((results (expand-duals (gethash s (graph-spo graph)) s)))
+    (if (eq p 'rdf@type)
+        (transform-a-results-to-rdf-type results)
+        results)))
+
+(defun %query-by-predicate (p graph)
+  "Helper: Query POS index by predicate"
+  (if (eq p 'rdf@type)
+      (let ((a-results (expand-duals (gethash 'a (graph-pos graph)) 'a 'pos)))
+        (transform-a-results-to-rdf-type a-results))
+      (expand-duals (gethash p (graph-pos graph)) p 'pos)))
+
+(defmethod triples (pattern (graph local-graph))
+  "Retrieve triples from graph matching PATTERN"
+  (let ((s (first pattern))
+        (p (second pattern))
+        (o (third pattern)))
+    (cond
+      ((not (var-or-wildp s)) (%query-by-subject s p graph))
+      ((not (var-or-wildp p)) (%query-by-predicate p graph))
+      ((not (var-or-wildp o)) (%query-by-object o p graph))
+      (t (%query-universal graph)))))
+```
+
 ### cl-rdf Project Structure
 
 ```
