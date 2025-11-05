@@ -2258,8 +2258,8 @@ Side Effects:
 
 Examples:
   (save-graph my-graph \"/tmp/data.rdf\")"
-  (let ((triples (raw-triples '(t t t) graph))
-        (serialized (triples-to-string triples)))
+  (let* ((triples (raw-triples '(t t t) graph))
+         (serialized (triples-to-string triples)))
     (with-open-file (out filename
                          :direction :output
                          :if-exists :supersede
