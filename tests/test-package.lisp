@@ -38,3 +38,7 @@
 (def-suite :conversion
     :in :cl-rdf
     :description "Format conversion (el-rdf ↔ cl-rdf)")
+
+(def-suite :visualization
+    :in :cl-rdf
+    :description "Graph visualization and rendering")
