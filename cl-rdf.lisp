@@ -951,3 +951,178 @@ is not yet implemented. Will differ in Phase 8 when content references are added
                     (setf result (append (expand-duals value key) result)))
                   spo-table)
          result)))))
+
+;;; ============================================================================
+;;;; Phase 5: Pattern Matching
+;;; ============================================================================
+
+(defun augmented-eq (pattern input)
+  "Type-aware equality comparison for pattern matching.
+
+Uses the most appropriate equality test based on the type of PATTERN:
+  - Symbols: EQ (fast pointer comparison)
+  - Strings: STRING= (content comparison)
+  - Numbers: EQL (handles floats correctly)
+  - Other types: EQUAL (deep comparison)
+
+Arguments:
+  PATTERN - Value from the pattern (determines comparison type)
+  INPUT   - Value from input data to compare against
+
+Returns:
+  T if values are equal according to type-appropriate test, NIL otherwise
+
+Examples:
+  (augmented-eq 'alice 'alice)     => T (symbol EQ)
+  (augmented-eq \"Alice\" \"Alice\")   => T (string STRING=)
+  (augmented-eq 42 42)             => T (number EQL)
+  (augmented-eq 'alice \"alice\")   => NIL (different types)"
+  (cond
+    ((symbolp pattern) (eq pattern input))
+    ((stringp pattern) (and (stringp input) (string= pattern input)))
+    ((numberp pattern) (and (numberp input) (eql pattern input)))
+    (t (equal pattern input))))
+
+(defun pat-match (pattern input)
+  "Match PATTERN against INPUT, returning variable bindings.
+
+Performs recursive pattern matching on list structures, binding variables
+(symbols starting with $) to their matched values. Returns a flat list of
+bindings where each binding is a cons cell (variable . value).
+
+Special bindings:
+  - ($var . value) - Variable binding
+  - (t . value)    - Wildcard match marker
+  - (nil . nil)    - Match failure marker
+
+Arguments:
+  PATTERN - Pattern to match (may contain variables like $subject)
+  INPUT   - Input data to match against
+
+Returns:
+  List of bindings (cons cells), including success/failure markers
+
+Examples:
+  (pat-match '$subject 'alice)
+  => (($subject . alice))
+
+  (pat-match '($s foaf@name $n) '(alice foaf@name \"Alice\"))
+  => (($s . alice) (t . foaf@name) ($n . \"Alice\"))
+
+  (pat-match 'alice 'bob)
+  => ((nil . nil))  ; Failed match
+
+Implementation note: Uses NCONC for performance (destructive but faster
+than APPEND). Not tail-recursive, but RDF patterns are shallow (max ~10 deep)."
+  (cond
+    ;; Base case: nil pattern
+    ((null pattern) nil)
+
+    ;; Variable: bind to input
+    ((variablep pattern)
+     (list (cons pattern input)))
+
+    ;; Both atoms: check equality
+    ((and (atom pattern) (atom input))
+     (if (augmented-eq pattern input)
+         (list (cons t input))      ; Success marker
+       (list (cons nil nil))))      ; Failure marker
+
+    ;; Lists: recurse on CAR and CDR
+    (t
+     (nconc (pat-match (car pattern) (car input))
+            (pat-match (cdr pattern) (cdr input))))))
+
+(defun ensure-lparallel-kernel ()
+  "Ensure lparallel kernel is initialized for parallel operations.
+
+Creates a kernel with 4 workers if not already initialized. This is called
+lazily by parallel functions (traverse-graph, filter-triples) before using
+pmap or premove-if.
+
+The kernel is stored in lparallel:*kernel* special variable."
+  (unless (and (boundp '*kernel*) *kernel*)
+    (setf *kernel* (make-kernel 4))))
+
+(defun traverse-graph (pattern triples)
+  "Apply PATTERN to TRIPLES, returning variable bindings for each match.
+
+Maps pat-match over all triples, filters out non-matching results, and returns
+a list of binding alists. For large datasets (100+ triples), uses parallel
+processing via lparallel:pmap.
+
+Arguments:
+  PATTERN - Pattern to match (e.g., '($subject foaf@name $name))
+  TRIPLES - List of triples to match against
+
+Returns:
+  List of binding alists, one for each matching triple
+
+Examples:
+  (traverse-graph '($s foaf@name $n)
+                  '((alice foaf@name \"Alice\")
+                    (bob foaf@name \"Bob\")
+                    (alice foaf@age 30)))
+  => ((($s . alice) ($n . \"Alice\"))
+      (($s . bob) ($n . \"Bob\")))
+
+Performance:
+  - Sequential for < 100 triples
+  - Parallel (4 workers) for >= 100 triples
+
+See also: PAT-MATCH, FILTER-TRIPLES"
+  (if (< (length triples) 100)
+      ;; Small dataset - sequential processing
+      (remove-if (lambda (bindings)
+                   (member '(nil . nil) bindings :test #'equal))
+                 (mapcar (lambda (triple)
+                           (remove '(t) (pat-match pattern triple) :test #'equal))
+                         triples))
+      ;; Large dataset - parallel processing
+      (progn
+        (ensure-lparallel-kernel)
+        (remove-if (lambda (bindings)
+                     (member '(nil . nil) bindings :test #'equal))
+                   (pmap 'list
+                         (lambda (triple)
+                           (remove '(t) (pat-match pattern triple) :test #'equal))
+                         triples)))))
+
+(defun filter-triples (pattern triples)
+  "Filter TRIPLES, returning only those that match PATTERN.
+
+Unlike TRAVERSE-GRAPH which returns bindings, this function returns the
+actual triples that match. For large datasets (100+ triples), uses parallel
+processing via lparallel:premove-if.
+
+Arguments:
+  PATTERN - Pattern to match (e.g., '($subject foaf@name $name))
+  TRIPLES - List of triples to filter
+
+Returns:
+  List of matching triples
+
+Examples:
+  (filter-triples '($s foaf@name $n)
+                  '((alice foaf@name \"Alice\")
+                    (bob foaf@name \"Bob\")
+                    (alice foaf@age 30)))
+  => ((alice foaf@name \"Alice\")
+      (bob foaf@name \"Bob\"))
+
+Performance:
+  - Sequential for < 100 triples
+  - Parallel (4 workers) for >= 100 triples
+
+See also: TRAVERSE-GRAPH, PAT-MATCH"
+  (if (< (length triples) 100)
+      ;; Small dataset - sequential processing
+      (remove-if (lambda (triple)
+                   (member '(nil . nil) (pat-match pattern triple) :test #'equal))
+                 triples)
+      ;; Large dataset - parallel processing
+      (progn
+        (ensure-lparallel-kernel)
+        (premove-if (lambda (triple)
+                      (member '(nil . nil) (pat-match pattern triple) :test #'equal))
+                    triples))))
