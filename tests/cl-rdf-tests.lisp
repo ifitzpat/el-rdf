@@ -2835,18 +2835,21 @@ someProperty schema:label \"some property\" ." out))
 
 (test convert-symbol-cl-to-elisp
   "Test converting cl-rdf symbols to el-rdf format (@ to :)"
-  (is (eq (convert-symbol-cl-to-elisp 'foaf@name) '|foaf:name|))
-  (is (eq (convert-symbol-cl-to-elisp 'schema@Person) '|schema:Person|))
-  (is (eq (convert-symbol-cl-to-elisp 'rdf@type) '|rdf:type|))
-  ;; Symbol without @ should remain unchanged
-  (is (eq (convert-symbol-cl-to-elisp 'alice) 'alice)))
+  (let ((converted1 (convert-symbol-cl-to-elisp 'foaf@name))
+        (converted2 (convert-symbol-cl-to-elisp 'schema@Person))
+        (converted3 (convert-symbol-cl-to-elisp 'rdf@type)))
+    (is (string= (symbol-name converted1) "foaf:name"))
+    (is (string= (symbol-name converted2) "schema:Person"))
+    (is (string= (symbol-name converted3) "rdf:type"))
+    ;; Symbol without @ should remain unchanged
+    (is (eq (convert-symbol-cl-to-elisp 'alice) 'alice))))
 
 (test convert-triple-cl-to-elisp
   "Test converting cl-rdf triple to el-rdf format"
   (let ((cl-triple '(alice foaf@name "Alice")))
     (let ((el-triple (convert-triple-cl-to-elisp cl-triple)))
       (is (eq (first el-triple) 'alice))
-      (is (eq (second el-triple) '|foaf:name|))
+      (is (string= (symbol-name (second el-triple)) "foaf:name"))
       (is (equal (third el-triple) "Alice")))))
 
 ;;; Save for el-rdf Tests
