@@ -1586,7 +1586,210 @@
 ;;; Phase 7: Additional query operations (SELECT, FILTER)
 ;;; ============================================================================
 
-;; Tests for SELECT and FILTER will be added after discussion with user
+;; Tests for binding-val
+
+(test binding-val-finds-variable
+  "Test binding-val extracts value for variable"
+  (let ((bindings '(($s . alice) ($name . "Alice") ($age . 30))))
+    (is (equal 'alice (binding-val '$s bindings)))
+    (is (equal "Alice" (binding-val '$name bindings)))
+    (is (equal 30 (binding-val '$age bindings)))))
+
+(test binding-val-missing-variable
+  "Test binding-val returns NIL for missing variable"
+  (let ((bindings '(($s . alice))))
+    (is (null (binding-val '$name bindings)))))
+
+(test binding-val-empty-bindings
+  "Test binding-val with empty bindings"
+  (is (null (binding-val '$s '()))))
+
+;; Tests for bindings-from-row
+
+(test bindings-from-row-simple
+  "Test bindings-from-row extracts multiple variables"
+  (let ((row '((($s . alice) ($name . "Alice") ($age . 30)))))
+    (let ((result (bindings-from-row '($name $age) row)))
+      (is (= 1 (length result)))
+      (is (equal '("Alice" 30) (first result))))))
+
+(test bindings-from-row-multiple-branches
+  "Test bindings-from-row with multiple binding branches"
+  (let ((row '((($s . alice) ($name . "Alice"))
+               (($s . bob) ($name . "Bob")))))
+    (let ((result (bindings-from-row '($s $name) row)))
+      (is (= 2 (length result)))
+      (is (member '(alice "Alice") result :test #'equal))
+      (is (member '(bob "Bob") result :test #'equal)))))
+
+(test bindings-from-row-missing-variable
+  "Test bindings-from-row with missing variable returns NIL"
+  (let ((row '((($s . alice) ($name . "Alice")))))
+    (let ((result (bindings-from-row '($name $age) row)))
+      (is (= 1 (length result)))
+      (is (equal '("Alice" nil) (first result))))))
+
+;; Tests for select
+
+(test select-simple
+  "Test select projects specific variables"
+  (let* ((graph (make-graph))
+         (_ (add-triples '((alice foaf@name "Alice")
+                           (alice foaf@age 30)
+                           (bob foaf@name "Bob")
+                           (bob foaf@age 25))
+                         graph))
+         (where-result (where '(($s foaf@name $name)
+                                ($s foaf@age $age))
+                              graph))
+         (result (select '($name) where-result)))
+    (declare (ignore _))
+    (is (= 2 (length result)))
+    (is (member '("Alice") result :test #'equal))
+    (is (member '("Bob") result :test #'equal))))
+
+(test select-multiple-variables
+  "Test select with multiple variables"
+  (let* ((graph (make-graph))
+         (_ (add-triples '((alice foaf@name "Alice")
+                           (alice foaf@age 30))
+                         graph))
+         (where-result (where '(($s foaf@name $name)
+                                ($s foaf@age $age))
+                              graph))
+         (result (select '($name $age) where-result)))
+    (declare (ignore _))
+    (is (= 1 (length result)))
+    (is (equal '("Alice" 30) (first result)))))
+
+(test select-all-variables
+  "Test select with all variables (*)"
+  (let* ((graph (make-graph))
+         (_ (add-triple '(alice foaf@name "Alice") graph))
+         (where-result (where '(($s foaf@name $name)) graph))
+         (result (select '($s $name) where-result)))
+    (declare (ignore _))
+    (is (= 1 (length result)))
+    (is (equal '(alice "Alice") (first result)))))
+
+(test select-with-no-match
+  "Test select returns nil values when WHERE returns :no-match"
+  (let* ((result (select '($name $age) :no-match)))
+    (is (= 1 (length result)))
+    (is (equal '(nil nil) (first result)))))
+
+(test select-with-nil
+  "Test select returns nil values when WHERE returns nil"
+  (let ((result (select '($name $age) nil)))
+    (is (= 1 (length result)))
+    (is (equal '(nil nil) (first result)))))
+
+(test select-empty-variable-list
+  "Test select with empty variable list"
+  (let* ((graph (make-graph))
+         (_ (add-triple '(alice foaf@name "Alice") graph))
+         (where-result (where '(($s foaf@name $name)) graph))
+         (result (select '() where-result)))
+    (declare (ignore _))
+    ;; Should return empty rows for each match
+    (is (= 1 (length result)))
+    (is (null (first result)))))
+
+;; Tests for eval-with-bindings
+
+(test eval-with-bindings-simple
+  "Test eval-with-bindings binds variables and evaluates function"
+  (let ((bindings '(($x . 5) ($y . 10))))
+    (is (equal 15 (eval-with-bindings bindings (lambda () (+ $x $y)))))))
+
+(test eval-with-bindings-with-symbols
+  "Test eval-with-bindings handles unbound symbols as quoted"
+  (let ((bindings '(($name . alice))))
+    (is (equal 'alice (eval-with-bindings bindings (lambda () $name))))))
+
+(test eval-with-bindings-filters-t-marker
+  "Test eval-with-bindings filters out (t . value) markers"
+  (let ((bindings '((t . ignore) ($x . 42))))
+    (is (equal 42 (eval-with-bindings bindings (lambda () $x))))))
+
+(test eval-with-bindings-comparison
+  "Test eval-with-bindings with comparison predicate"
+  (let ((bindings '(($age . 30))))
+    (is (eval-with-bindings bindings (lambda () (> $age 25))))
+    (is (not (eval-with-bindings bindings (lambda () (< $age 25)))))))
+
+;; Tests for filter
+
+(test filter-simple-predicate
+  "Test filter with simple numeric comparison"
+  (let* ((graph (make-graph))
+         (_ (add-triples '((alice foaf@age 30)
+                           (bob foaf@age 25)
+                           (charlie foaf@age 35))
+                         graph))
+         (where-result (where '(($s foaf@age $age)) graph))
+         (result (filter (lambda () (> $age 28)) where-result)))
+    (declare (ignore _))
+    ;; Should return alice and charlie (ages 30 and 35)
+    (is (= 2 (length result)))
+    (is (every (lambda (binding-set)
+                 (let ((age (cdr (assoc '$age (car binding-set)))))
+                   (> age 28)))
+               result))))
+
+(test filter-string-comparison
+  "Test filter with string comparison"
+  (let* ((graph (make-graph))
+         (_ (add-triples '((alice foaf@name "Alice")
+                           (bob foaf@name "Bob")
+                           (ann foaf@name "Ann"))
+                         graph))
+         (where-result (where '(($s foaf@name $name)) graph))
+         (result (filter (lambda () (string< $name "B")) where-result)))
+    (declare (ignore _))
+    ;; Should return alice and ann (names < "B")
+    (is (= 2 (length result)))))
+
+(test filter-no-matches
+  "Test filter returns empty when no bindings satisfy predicate"
+  (let* ((graph (make-graph))
+         (_ (add-triple '(alice foaf@age 30) graph))
+         (where-result (where '(($s foaf@age $age)) graph))
+         (result (filter (lambda () (> $age 100)) where-result)))
+    (declare (ignore _))
+    (is (null result))))
+
+(test filter-all-match
+  "Test filter returns all when all bindings satisfy predicate"
+  (let* ((graph (make-graph))
+         (_ (add-triples '((alice foaf@age 30)
+                           (bob foaf@age 25))
+                         graph))
+         (where-result (where '(($s foaf@age $age)) graph))
+         (result (filter (lambda () (> $age 20)) where-result)))
+    (declare (ignore _))
+    (is (= 2 (length result)))))
+
+(test filter-with-multiple-variables
+  "Test filter with predicate using multiple variables"
+  (let* ((graph (make-graph))
+         (_ (add-triples '((alice foaf@name "Alice")
+                           (alice foaf@age 30)
+                           (bob foaf@name "Bob")
+                           (bob foaf@age 25))
+                         graph))
+         (where-result (where '(($s foaf@name $name)
+                                ($s foaf@age $age))
+                              graph))
+         (result (filter (lambda () (and (string= $name "Alice") (> $age 25)))
+                         where-result)))
+    (declare (ignore _))
+    (is (= 1 (length result)))
+    (is (equal 'alice (cdr (assoc '$s (caar result)))))))
+
+(test filter-empty-bindings
+  "Test filter with empty binding list"
+  (is (null (filter (lambda () t) '()))))
 
 ;;; ============================================================================
 ;;; Phase 8-12: Additional test suites
