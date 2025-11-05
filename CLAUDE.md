@@ -6,7 +6,142 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 el-rdf is an in-memory RDF triple store implemented in Emacs Lisp. It provides SPARQL-like query operations, TTL file import, and graph visualization capabilities.
 
-## Development Commands
+## Common Lisp Port (cl-rdf)
+
+**IMPORTANT**: This repository contains both the original Emacs Lisp implementation (el-rdf) and an in-progress Common Lisp port (cl-rdf).
+
+### Port Status
+
+- **Branch**: `claude/cl-port-011CUpNDW7sG6n2sHxzXJPCp`
+- **Plan**: See `CL-PORT-PLAN.md` for complete implementation roadmap
+- **Progress**: Phase 1 (Core utilities) - in progress
+
+### Key Differences: el-rdf vs cl-rdf
+
+**Symbol Format**:
+- **el-rdf**: Uses colon separator `namespace:resource` (e.g., `schema:Person`, `foaf:name`)
+- **cl-rdf**: Uses period separator `namespace.resource` (e.g., `schema.Person`, `foaf.name`)
+- **Reason**: Colon is reserved for CL packages; period won't conflict with SPARQL 1.1 property paths
+
+**Variables**:
+- Both use `$variable` syntax (e.g., `$subject`, `$name`) - works in both languages
+
+**Wildcards**:
+- Both use `t` as wildcard matching any value
+
+**Format Conversion**:
+- Conversion functions provided for interoperability between el-rdf and cl-rdf serialized graphs
+- See Phase 13 in CL-PORT-PLAN.md for details
+
+### TDD Workflow for cl-rdf Port
+
+**CRITICAL**: The cl-rdf port uses Test-Driven Development with GitHub Actions CI. You MUST follow this workflow:
+
+#### Step 1: Write Test First
+```lisp
+;; In tests/cl-rdf-tests.lisp
+(in-suite :core)
+
+(test variablep
+  "Test variable predicate - identifies symbols starting with $"
+  (is (variablep '$subject))
+  (is (variablep '$name))
+  (is (not (variablep 'regular-symbol)))
+  (is (not (variablep "string")))
+  (is (not (variablep 42))))
+```
+
+#### Step 2: Commit & Push (Test Should Fail)
+```bash
+git add tests/cl-rdf-tests.lisp
+git commit -m "Add test for variablep"
+git push origin claude/cl-port-011CUpNDW7sG6n2sHxzXJPCp
+```
+→ GitHub Actions runs → **Test FAILS** (expected - function not implemented)
+
+#### Step 3: Implement Function
+```lisp
+;; In cl-rdf.lisp
+(defun variablep (symbol)
+  "Return T if SYMBOL is a SPARQL variable (starts with $).
+
+  Variables are identified by a leading $ character in the symbol name.
+
+  Examples:
+    (variablep '$subject) => T
+    (variablep '$name) => T
+    (variablep 'regular-symbol) => NIL"
+  (and (symbolp symbol)
+       (let ((name (symbol-name symbol)))
+         (and (> (length name) 0)
+              (char= (char name 0) #\$)))))
+```
+
+#### Step 4: Commit & Push (Test Should Pass)
+```bash
+git add cl-rdf.lisp
+git commit -m "Implement variablep with full test coverage"
+git push origin claude/cl-port-011CUpNDW7sG6n2sHxzXJPCp
+```
+→ GitHub Actions runs → **Test PASSES** ✓
+
+#### Step 5: Verify CI Results
+
+Check GitHub Actions results:
+- Go to GitHub Actions tab
+- View latest workflow run
+- Verify tests pass on both SBCL and ECL
+
+**If you cannot access GitHub**: Ask the user to confirm CI passed before proceeding to next function.
+
+### Important Notes for cl-rdf Development
+
+1. **Always write tests before implementation** - This is non-negotiable for the port
+2. **Push after each phase** - Write test → push → implement → push
+3. **Check both implementations** - CI tests on SBCL and ECL, both must pass
+4. **Follow the plan** - Implement functions in order according to CL-PORT-PLAN.md phases
+5. **One function at a time** - Don't implement multiple functions in one commit
+6. **Clear commit messages** - Format: "Add test for X" then "Implement X with test coverage"
+
+### cl-rdf Project Structure
+
+```
+el-rdf/
+├── package.lisp              # CL package definition
+├── cl-rdf.asd                # ASDF system definition
+├── cl-rdf.lisp               # Main implementation
+├── tests/
+│   ├── test-package.lisp     # Test suite organization
+│   └── cl-rdf-tests.lisp     # Test implementations
+├── .github/workflows/
+│   └── cl-rdf-tests.yml      # CI configuration
+└── CL-PORT-PLAN.md           # Complete implementation plan
+```
+
+### Running cl-rdf Tests Locally (If Available)
+
+```bash
+# SBCL
+sbcl --eval "(asdf:test-system :cl-rdf)" --quit
+
+# ECL
+ecl --eval "(asdf:test-system :cl-rdf)" --eval "(ext:quit)"
+
+# Or in REPL
+(ql:quickload :cl-rdf/tests)
+(fiveam:run! :cl-rdf)           ; Run all tests
+(fiveam:run! :core)             ; Run core suite only
+(fiveam:run! :storage)          # Run storage suite only
+```
+
+### cl-rdf Dependencies
+
+- **alexandria** - Utilities library
+- **ironclad** - For MD5 hashing (content references)
+- **uiop** - Portable filesystem operations
+- **fiveam** - Testing framework
+
+## Development Commands (el-rdf)
 
 ### Running Tests
 ```bash
