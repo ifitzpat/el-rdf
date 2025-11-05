@@ -731,3 +731,65 @@ See also: REMOVE-HOOK-FROM-GRAPH, GET-GRAPH-HOOKS, ADD-TRIPLES, DELETE-TRIPLES"
         (:query (setf (graph-query-hooks graph)
                       (cons hook-function (graph-query-hooks graph)))))))
   nil)
+
+(defun remove-hook-from-graph (graph hook-type hook-function)
+  "Remove HOOK-FUNCTION from GRAPH's hooks of HOOK-TYPE.
+
+This is the inverse of ADD-HOOK-TO-GRAPH. It removes a specific hook function
+from the graph's hook list. If the hook is not present, this is a no-op (does
+not signal an error).
+
+Arguments:
+  GRAPH         - A graph object (CLOS instance)
+  HOOK-TYPE     - Type of hook: :add, :delete, or :query
+  HOOK-FUNCTION - The function to remove
+
+Returns:
+  NIL
+
+Side Effects:
+  Modifies the graph's hook list for the specified type
+
+Examples:
+  ;; Remove a specific hook
+  (remove-hook-from-graph g :add my-hook-fn)
+
+  ;; Safe to call even if hook doesn't exist
+  (remove-hook-from-graph g :add nonexistent-hook)
+
+See also: ADD-HOOK-TO-GRAPH, GET-GRAPH-HOOKS"
+  (ecase hook-type
+    (:add (setf (graph-add-hooks graph)
+                (remove hook-function (graph-add-hooks graph))))
+    (:delete (setf (graph-delete-hooks graph)
+                   (remove hook-function (graph-delete-hooks graph))))
+    (:query (setf (graph-query-hooks graph)
+                  (remove hook-function (graph-query-hooks graph)))))
+  nil)
+
+(defun get-graph-hooks (graph hook-type)
+  "Get all hooks of HOOK-TYPE from GRAPH.
+
+Returns the list of hook functions registered for the specified hook type.
+The returned list can be empty if no hooks are registered.
+
+Arguments:
+  GRAPH     - A graph object (CLOS instance)
+  HOOK-TYPE - Type of hook: :add, :delete, or :query
+
+Returns:
+  List of hook functions (may be NIL if no hooks registered)
+
+Examples:
+  ;; Get all add-hooks
+  (get-graph-hooks g :add)
+
+  ;; Check if any delete-hooks are registered
+  (when (get-graph-hooks g :delete)
+    (format t \"Graph has delete hooks~%\"))
+
+See also: ADD-HOOK-TO-GRAPH, REMOVE-HOOK-FROM-GRAPH"
+  (ecase hook-type
+    (:add (graph-add-hooks graph))
+    (:delete (graph-delete-hooks graph))
+    (:query (graph-query-hooks graph))))
