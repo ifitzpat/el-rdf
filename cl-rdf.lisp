@@ -387,7 +387,8 @@ Normalization:
   (let* ((subject (first triple))
          ;; Normalize rdf@type to 'a for storage efficiency
          (predicate (if (eq (second triple) 'rdf@type) 'a (second triple)))
-         (object (third triple))
+         ;; Process object for content reference conversion
+         (object (process-triple-object (third triple)))
          (spo (graph-spo graph))
          (osp (graph-osp graph))
          (pos (graph-pos graph)))
@@ -905,9 +906,8 @@ Selects the appropriate index based on the pattern to optimize query performance
                            (setf result (append (expand-duals value key) result)))
                          spo-table)
                 result)))))
-      ;; TODO Phase 8: Add content reference resolution here
-      ;; For now, just return raw results (no content refs implemented yet)
-      raw-results)))
+      ;; Resolve content references before returning
+      (resolve-triple-objects raw-results))))
 
 (defgeneric raw-triples (pattern graph)
   (:documentation "Retrieve triples from GRAPH matching PATTERN without resolving content references.
@@ -915,16 +915,12 @@ Selects the appropriate index based on the pattern to optimize query performance
 Like TRIPLES, but returns raw data without resolving content references.
 Used for checkpointing to preserve file references.
 
-Currently identical to TRIPLES since content references are not yet implemented
-(Phase 8).
-
 See TRIPLES for detailed documentation of pattern matching."))
 
 (defmethod raw-triples (pattern (graph local-graph))
   "Retrieve triples from local graph without resolving content references.
 
-Currently identical to TRIPLES implementation since content reference system
-is not yet implemented. Will differ in Phase 8 when content references are added."
+Used for serialization and checkpointing to preserve file references."
   (let ((s (first pattern))
         (p (second pattern))
         (o (third pattern)))
@@ -1955,3 +1951,178 @@ See also: FILTER-EXISTS, ASK, FILTER"
                (ask (list instantiated-pattern) graph)))
            binding-set))
    bindings))
+
+;;;; ============================================================================
+;;;; Phase 8: Content Reference System
+;;;; ============================================================================
+
+;;; Large string objects (> 1000 characters) are stored as files to reduce
+;;; memory usage and enable deduplication via MD5 hashing.
+;;;
+;;; Storage format: "file:content-<md5-hash>.txt"
+;;; Cache location: XDG_CACHE_HOME/cl-rdf/content-<md5-hash>.txt
+
+(defvar *content-reference-threshold* 1000
+  "Maximum string length before converting to content reference.")
+
+(defvar *content-cache-dir* nil
+  "Cache directory for content references. Initialized on first use.")
+
+;;; -----------------------------------------------------------------------------
+;;; Content Reference Predicates
+;;; -----------------------------------------------------------------------------
+
+(defun content-reference-p (value)
+  "Return T if VALUE is a content reference string.
+
+Content references have the format: file:content-<hash>.txt
+
+Examples:
+  (content-reference-p \"file:content-abc123.txt\") => T
+  (content-reference-p \"regular string\") => NIL"
+  (and (stringp value)
+       (>= (length value) 17)  ; Minimum: "file:content-.txt"
+       (alexandria:starts-with-subseq "file:content-" value)
+       (alexandria:ends-with-subseq ".txt" value)))
+
+;;; -----------------------------------------------------------------------------
+;;; Content Storage and Retrieval
+;;; -----------------------------------------------------------------------------
+
+(defun %ensure-content-cache-dir ()
+  "Ensure content cache directory exists and return its path."
+  (unless *content-cache-dir*
+    (let* ((cache-home (or (uiop:getenv "XDG_CACHE_HOME")
+                           (merge-pathnames ".cache/" (user-homedir-pathname))))
+           (cl-rdf-cache (merge-pathnames "cl-rdf/" cache-home)))
+      (ensure-directories-exist cl-rdf-cache)
+      (setf *content-cache-dir* cl-rdf-cache)))
+  *content-cache-dir*)
+
+(defun %compute-content-hash (content)
+  "Compute MD5 hash of CONTENT string for deduplication."
+  (let ((digest (ironclad:digest-sequence
+                 :md5
+                 (ironclad:ascii-string-to-byte-array content))))
+    (ironclad:byte-array-to-hex-string digest)))
+
+(defun store-large-content (content)
+  "Store CONTENT as file reference if it exceeds threshold.
+
+If CONTENT is a string longer than *content-reference-threshold*,
+stores it in a file and returns a reference string. Otherwise returns
+CONTENT unchanged.
+
+Returns:
+  - Original content if below threshold or not a string
+  - Reference string \"file:content-<hash>.txt\" if stored
+
+Examples:
+  (store-large-content \"short\") => \"short\"
+  (store-large-content (make-string 1500 :initial-element #\\x))
+  => \"file:content-abc123...txt\""
+  (if (and (stringp content)
+           (> (length content) *content-reference-threshold*))
+      (let* ((hash (%compute-content-hash content))
+             (filename (format nil "content-~A.txt" hash))
+             (filepath (merge-pathnames filename (%ensure-content-cache-dir))))
+        ;; Write content to file (creates or overwrites)
+        (with-open-file (stream filepath
+                                :direction :output
+                                :if-exists :supersede
+                                :if-does-not-exist :create)
+          (write-string content stream))
+        ;; Return reference
+        (format nil "file:~A" filename))
+    content))
+
+(defun resolve-content-reference (value)
+  "Resolve content reference VALUE to its stored content.
+
+If VALUE is a content reference, reads and returns the file contents.
+Otherwise returns VALUE unchanged.
+
+Arguments:
+  VALUE - String (reference or regular) or any other value
+
+Returns:
+  - File contents if VALUE is a reference and file exists
+  - Original VALUE otherwise
+
+Examples:
+  (resolve-content-reference \"regular\") => \"regular\"
+  (resolve-content-reference \"file:content-abc123.txt\")
+  => <contents of file>"
+  (if (content-reference-p value)
+      (let* ((filename (subseq value 5))  ; Strip "file:" prefix
+             (filepath (merge-pathnames filename (%ensure-content-cache-dir))))
+        (if (probe-file filepath)
+            (uiop:read-file-string filepath)
+          value))  ; Return reference if file missing
+    value))
+
+;;; -----------------------------------------------------------------------------
+;;; Triple Object Processing
+;;; -----------------------------------------------------------------------------
+
+(defun process-triple-object (object)
+  "Process OBJECT for storage, converting large strings to references.
+
+If OBJECT is a string exceeding *content-reference-threshold*,
+converts it to a content reference. Otherwise returns OBJECT unchanged.
+
+This function is called by ADD-TRIPLE before storing.
+
+Arguments:
+  OBJECT - Any value (string, symbol, number, etc.)
+
+Returns:
+  - Content reference if OBJECT is a large string
+  - Original OBJECT otherwise
+
+Examples:
+  (process-triple-object \"short\") => \"short\"
+  (process-triple-object (make-string 1500)) => \"file:content-...txt\""
+  (if (stringp object)
+      (store-large-content object)
+    object))
+
+(defun resolve-triple-object (triple)
+  "Resolve content references in TRIPLE's object position.
+
+Takes a triple (S P O) and resolves O if it's a content reference.
+
+Arguments:
+  TRIPLE - List of (subject predicate object)
+
+Returns:
+  New triple with resolved object
+
+Examples:
+  (resolve-triple-object '(alice foaf@name \"Alice\"))
+  => (alice foaf@name \"Alice\")
+
+  (resolve-triple-object '(bob foaf@bio \"file:content-abc.txt\"))
+  => (bob foaf@bio \"<resolved content>\")"
+  (list (first triple)
+        (second triple)
+        (resolve-content-reference (third triple))))
+
+(defun resolve-triple-objects (triples)
+  "Resolve content references in a list of TRIPLES.
+
+Processes each triple's object position, resolving content references.
+
+Arguments:
+  TRIPLES - List of triples
+
+Returns:
+  List of triples with resolved objects
+
+Examples:
+  (resolve-triple-objects
+    '((alice foaf@name \"Alice\")
+      (bob foaf@bio \"file:content-xyz.txt\")))
+  => ((alice foaf@name \"Alice\")
+      (bob foaf@bio \"<resolved content>\"))"
+  (mapcar #'resolve-triple-object triples))
