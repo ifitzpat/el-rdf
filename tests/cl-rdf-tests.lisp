@@ -128,18 +128,18 @@
     ;; Should be symbols
     (is (symbolp bn1))
     (is (symbolp bn2))
-    ;; Should start with _:
-    (is (alexandria:starts-with-subseq "_:" (symbol-name bn1)))
-    (is (alexandria:starts-with-subseq "_:" (symbol-name bn2)))
+    ;; Should start with _. (cl-rdf uses period separator)
+    (is (alexandria:starts-with-subseq "_." (symbol-name bn1)))
+    (is (alexandria:starts-with-subseq "_." (symbol-name bn2)))
     ;; Should be unique (different blank nodes)
     (is (not (eq bn1 bn2)))
     ;; Generate multiple and verify they're all different
     (let ((nodes (loop repeat 10 collect (bnode))))
       ;; All should be symbols
       (is (every #'symbolp nodes))
-      ;; All should start with _:
+      ;; All should start with _.
       (is (every (lambda (n)
-                   (alexandria:starts-with-subseq "_:" (symbol-name n)))
+                   (alexandria:starts-with-subseq "_." (symbol-name n)))
                  nodes))
       ;; All should be unique
       (is (= (length nodes) (length (remove-duplicates nodes)))))))
