@@ -1044,11 +1044,57 @@ git commit -m "Implement function-name with tests"
 - Only converts `:` when preceded by alphanumeric (not keywords)
 - Test files use pipe notation `|foaf:name|` for el-rdf format symbols
 
+✅ **Phase 10: Checkpointing System** (10/10 functions)
+
+**Checkpoint Utilities**:
+- `get-checkpoint-dir` - Get/create checkpoint directory (5 lines)
+- `checkpoint-file-path` - Generate checkpoint file path (3 lines)
+
+**Checkpoint Operations**:
+- `register-graph-for-checkpointing` - Register graph for auto-checkpointing (4 lines)
+- `checkpoint-hook` - Hook function for automatic checkpointing (8 lines)
+- `save-named-graph` - Save named graph immediately (4 lines)
+- `restore-named-graph` - Restore from checkpoint and register (7 lines)
+
+**Checkpoint Metadata**:
+- `save-checkpoint-metadata` - Save operation metadata (8 lines)
+- `load-checkpoint-metadata` - Load metadata plist (5 lines)
+- `list-checkpoints` - List available checkpoints (4 lines)
+- `delete-checkpoint` - Remove checkpoint and metadata files (13 lines)
+
+**Implementation Notes**:
+- Auto-checkpointing via hooks (add-triples and delete-triples)
+- Metadata includes operation type, data size, timestamp
+- Directory: `XDG_CACHE_HOME/cl-rdf/checkpoints/`
+- File format: `<name>.checkpoint` and `<name>.metadata`
+- Global `*graph-checkpoints*` hash table tracks registered graphs
+- Preserves content references via `raw-triples`
+- 23 comprehensive test cases covering all scenarios
+- All functions under 30-line limit ✅
+
+**Usage Pattern**:
+```lisp
+;; Create named graph
+(defvar *my-graph* (make-graph :name "my-data"))
+
+;; Register for automatic checkpointing
+(register-graph-for-checkpointing *my-graph* "my-data")
+
+;; Modifications automatically trigger checkpoints
+(add-triples '((alice foaf@name "Alice")) *my-graph*)
+
+;; Or save manually
+(save-named-graph *my-graph*)
+
+;; Restore later
+(defvar *restored* (restore-named-graph "my-data"))
+```
+
 ### Current Phase
 
-🔄 **Phase 10: Checkpointing System** (0/? functions)
+🔄 **Phase 11: TTL Import** (0/? functions)
 - Next phase to be implemented
-- See lines 295-308 for details
+- See lines 317-359 for details
 
 ## Next Steps
 
@@ -1068,7 +1114,8 @@ git commit -m "Implement function-name with tests"
 14. ✅ Complete Phase 7: Query Operations (11/11 - ASK, SELECT, FILTER, CONSTRUCT, DELETE-DATA)
 15. ✅ Complete Phase 8: Content Reference System (6/6 - large string storage with MD5 deduplication)
 16. ✅ Complete Phase 9: Serialization and Format Conversion (7/7 - save/load with el-rdf migration support)
-17. 🔄 Begin Phase 10: Checkpointing System
+17. ✅ Complete Phase 10: Checkpointing System (10/10 - automatic checkpointing with metadata)
+18. 🔄 Begin Phase 11: TTL Import
 
 ---
 
