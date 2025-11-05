@@ -138,8 +138,15 @@ ecl --eval "(asdf:test-system :cl-rdf)" --eval "(ext:quit)"
 
 - **alexandria** - Utilities library
 - **ironclad** - For MD5 hashing (content references)
-- **uiop** - Portable filesystem operations
+- **uiop** - Portable filesystem operations (included with ASDF)
 - **fiveam** - Testing framework
+
+**IMPORTANT**: When adding new dependencies to `cl-rdf.asd`, you MUST also update:
+1. **`guix.scm`** - Add corresponding `sbcl-*` package to `inputs` or `native-inputs`
+2. **`.github/workflows/cl-rdf-tests.yml`** - Add to `qlfile-template` if not in Quicklisp
+3. **`CL-PORT-PLAN.md`** - Update dependencies list in the plan
+
+Forgetting to update guix.scm will cause local Guix shell testing to fail with missing dependencies!
 
 ## Development Commands (el-rdf)
 
