@@ -754,7 +754,167 @@
     (is (null (get-graph-hooks g :query)))))
 
 ;;; ============================================================================
-;;; Phase 4-12: Additional test suites
+;;; Phase 4: Triple Retrieval
+;;; ============================================================================
+
+(in-suite :storage)
+
+;; Tests for triples function
+
+(test triples-query-by-subject
+  "Test retrieving triples by concrete subject (uses SPO index)"
+  (let ((g (make-graph)))
+    ;; Add test data
+    (add-triple '(alice@person foaf@name "Alice") g)
+    (add-triple '(alice@person foaf@age 30) g)
+    (add-triple '(bob@person foaf@name "Bob") g)
+
+    ;; Query by subject
+    (let ((results (triples '(alice@person t t) g)))
+      (is (= 2 (length results)))
+      (is (member '(alice@person foaf@name "Alice") results :test #'equal))
+      (is (member '(alice@person foaf@age 30) results :test #'equal)))
+
+    ;; Query by subject with specific predicate
+    (let ((results (triples '(alice@person foaf@name t) g)))
+      (is (= 1 (length results)))
+      (is (equal '(alice@person foaf@name "Alice") (first results))))))
+
+(test triples-query-by-predicate
+  "Test retrieving triples by concrete predicate (uses POS index)"
+  (let ((g (make-graph)))
+    ;; Add test data
+    (add-triple '(alice@person foaf@name "Alice") g)
+    (add-triple '(bob@person foaf@name "Bob") g)
+    (add-triple '(alice@person foaf@age 30) g)
+
+    ;; Query by predicate
+    (let ((results (triples '(t foaf@name t) g)))
+      (is (= 2 (length results)))
+      (is (member '(alice@person foaf@name "Alice") results :test #'equal))
+      (is (member '(bob@person foaf@name "Bob") results :test #'equal)))))
+
+(test triples-query-by-object
+  "Test retrieving triples by concrete object (uses OSP index)"
+  (let ((g (make-graph)))
+    ;; Add test data
+    (add-triple '(alice@person foaf@name "Alice") g)
+    (add-triple '(bob@person foaf@name "Bob") g)
+    (add-triple '(alice@person foaf@age 30) g)
+    (add-triple '(charlie@person foaf@age 30) g)
+
+    ;; Query by object (number)
+    (let ((results (triples '(t t 30) g)))
+      (is (= 2 (length results)))
+      (is (member '(alice@person foaf@age 30) results :test #'equal))
+      (is (member '(charlie@person foaf@age 30) results :test #'equal)))
+
+    ;; Query by object (string)
+    (let ((results (triples '(t t "Bob") g)))
+      (is (= 1 (length results)))
+      (is (equal '(bob@person foaf@name "Bob") (first results))))))
+
+(test triples-universal-pattern
+  "Test universal pattern returns all triples"
+  (let ((g (make-graph)))
+    ;; Add test data
+    (add-triple '(alice@person foaf@name "Alice") g)
+    (add-triple '(bob@person foaf@name "Bob") g)
+    (add-triple '(alice@person foaf@age 30) g)
+
+    ;; Query all triples
+    (let ((results (triples '(t t t) g)))
+      (is (= 3 (length results)))
+      (is (member '(alice@person foaf@name "Alice") results :test #'equal))
+      (is (member '(bob@person foaf@name "Bob") results :test #'equal))
+      (is (member '(alice@person foaf@age 30) results :test #'equal)))))
+
+(test triples-rdf-type-equivalence
+  "Test that a and rdf@type are treated as equivalent"
+  (let ((g (make-graph)))
+    ;; add-triple normalizes rdf@type to 'a' in storage
+    (add-triple '(alice@person rdf@type foaf@Person) g)
+    (add-triple '(bob@person a schema@Person) g)
+
+    ;; Query using rdf@type should find both (stored as 'a')
+    (let ((results (triples '(t rdf@type t) g)))
+      (is (= 2 (length results)))
+      ;; Results should show rdf@type (transformed from 'a')
+      (is (member '(alice@person rdf@type foaf@Person) results :test #'equal))
+      (is (member '(bob@person rdf@type schema@Person) results :test #'equal)))
+
+    ;; Query using 'a' directly should also work
+    (let ((results (triples '(t a t) g)))
+      (is (= 2 (length results))))))
+
+(test triples-empty-results
+  "Test that queries with no matches return empty list"
+  (let ((g (make-graph)))
+    (add-triple '(alice@person foaf@name "Alice") g)
+
+    ;; Query for non-existent subject
+    (is (null (triples '(bob@person t t) g)))
+
+    ;; Query for non-existent predicate
+    (is (null (triples '(t foaf@age t) g)))
+
+    ;; Query for non-existent object
+    (is (null (triples '(t t "Bob") g))))))
+
+(test triples-with-variables
+  "Test that variables ($var) work as wildcards"
+  (let ((g (make-graph)))
+    (add-triple '(alice@person foaf@name "Alice") g)
+    (add-triple '(bob@person foaf@name "Bob") g)
+
+    ;; Variables should work like wildcards
+    (let ((results (triples '($subject foaf@name $name) g)))
+      (is (= 2 (length results)))
+      (is (member '(alice@person foaf@name "Alice") results :test #'equal))
+      (is (member '(bob@person foaf@name "Bob") results :test #'equal)))))
+
+(test triples-empty-graph
+  "Test querying an empty graph returns no results"
+  (let ((g (make-graph)))
+    (is (null (triples '(t t t) g)))
+    (is (null (triples '(alice@person foaf@name t) g)))))
+
+;; Tests for raw-triples function
+
+(test raw-triples-basic
+  "Test that raw-triples works identically to triples (for now, no content refs)"
+  (let ((g (make-graph)))
+    ;; Add test data
+    (add-triple '(alice@person foaf@name "Alice") g)
+    (add-triple '(bob@person foaf@age 30) g)
+
+    ;; raw-triples should return same results as triples (no content refs yet)
+    (let ((triples-result (triples '(t t t) g))
+          (raw-result (raw-triples '(t t t) g)))
+      (is (= (length triples-result) (length raw-result)))
+      (is (null (set-exclusive-or triples-result raw-result :test #'equal))))))
+
+(test raw-triples-query-patterns
+  "Test raw-triples with different query patterns"
+  (let ((g (make-graph)))
+    (add-triple '(alice@person foaf@name "Alice") g)
+    (add-triple '(bob@person foaf@name "Bob") g)
+    (add-triple '(alice@person foaf@age 30) g)
+
+    ;; Query by subject
+    (let ((results (raw-triples '(alice@person t t) g)))
+      (is (= 2 (length results))))
+
+    ;; Query by predicate
+    (let ((results (raw-triples '(t foaf@name t) g)))
+      (is (= 2 (length results))))
+
+    ;; Query by object
+    (let ((results (raw-triples '(t t "Alice") g)))
+      (is (= 1 (length results))))))
+
+;;; ============================================================================
+;;; Phase 5-12: Additional test suites
 ;;; ============================================================================
 
 ;; Tests for remaining phases will be added as implementation progresses
