@@ -87,12 +87,28 @@ git push origin claude/cl-port-011CUpNDW7sG6n2sHxzXJPCp
 
 #### Step 5: Verify CI Results
 
-Check GitHub Actions results:
-- Go to GitHub Actions tab
+**Automated CI Check** (Preferred):
+```bash
+./scripts/check-ci.sh
+```
+
+This script:
+- Uses public GitHub API (no authentication needed)
+- Shows latest run status, conclusion, and failed steps
+- Returns: 0=passed, 1=failed, 2=in progress
+
+**Manual Check** (Fallback):
+- Go to https://github.com/ifitzpat/el-rdf/actions
 - View latest workflow run
 - Verify tests pass on both SBCL and ECL
 
-**If you cannot access GitHub**: Ask the user to confirm CI passed before proceeding to next function.
+**Expected Output** when tests pass:
+```
+✅ CI PASSED
+```
+
+**If tests fail**:
+The script shows the failed step name and provides a link to view full details on GitHub.
 
 ### Important Notes for cl-rdf Development
 
