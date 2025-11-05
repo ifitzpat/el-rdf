@@ -759,6 +759,21 @@
 
 (in-suite :storage)
 
+;; Diagnostic test to check basic triple retrieval
+
+(test triples-basic-diagnostic
+  "Minimal test to diagnose triples function"
+  (let ((g (make-graph)))
+    ;; Add one simple triple
+    (add-triple '(alice foaf-name "Alice") g)
+
+    ;; Try to retrieve it
+    (let ((results (triples '(alice t t) g)))
+      (format t "~%DEBUG: results = ~S~%" results)
+      (is (not (null results)) "Should have at least one result")
+      (is (= 1 (length results)) "Should have exactly one result")
+      (is (equal '(alice foaf-name "Alice") (first results))))))
+
 ;; Tests for triples function
 
 (test triples-query-by-subject
