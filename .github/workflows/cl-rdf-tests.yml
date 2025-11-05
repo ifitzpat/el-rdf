@@ -47,6 +47,7 @@ jobs:
         run: |
           ${{ matrix.lisp }} --non-interactive \
             --load ~/quicklisp/setup.lisp \
+            --eval '(push (truename ".") asdf:*central-registry*)' \
             --eval '(format t "~%~%========================================~%")' \
             --eval '(format t "Loading cl-rdf test system...~%")' \
             --eval '(format t "========================================~%~%")' \
