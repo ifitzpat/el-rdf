@@ -72,7 +72,7 @@ jobs:
                               (format t "~%~%✗ Some tests failed!~%~%")
                               (uiop:quit 1))))'
           else
-            ecl -norc -shell ~/quicklisp/setup.lisp \
+            ecl -norc -load ~/quicklisp/setup.lisp \
               -eval '(push (truename ".") asdf:*central-registry*)' \
               -eval '(format t "~%~%========================================~%")' \
               -eval '(format t "Loading cl-rdf test system...~%")' \
