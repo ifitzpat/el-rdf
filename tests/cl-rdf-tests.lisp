@@ -324,6 +324,81 @@
     ;; Verify POS index
     (is (not (null (gethash 'schema@knows (graph-pos g)))))))
 
+;; Tests for delete-triple
+
+(test delete-triple-basic
+  "Test deleting a single triple"
+  (let ((g (make-graph)))
+    ;; Add and then delete
+    (add-triple '(John schema@name "John Doe") g)
+    (delete-triple '(John schema@name "John Doe") g)
+    ;; All indices should be cleaned up (entry removed entirely)
+    (is (null (gethash 'John (graph-spo g))))
+    (is (null (gethash "John Doe" (graph-osp g))))
+    (is (null (gethash 'schema@name (graph-pos g))))))
+
+(test delete-triple-multiple-predicates
+  "Test deleting one triple while leaving others"
+  (let ((g (make-graph)))
+    ;; Add two triples for same subject
+    (add-triple '(John schema@name "John Doe") g)
+    (add-triple '(John schema@age 30) g)
+    ;; Delete one
+    (delete-triple '(John schema@name "John Doe") g)
+    ;; John should still exist in SPO with schema@age
+    (let ((spo-entry (gethash 'John (graph-spo g))))
+      (is (not (null spo-entry)))
+      (is (null (assoc 'schema@name spo-entry)))
+      (is (not (null (assoc 'schema@age spo-entry)))))
+    ;; "John Doe" should be removed from OSP
+    (is (null (gethash "John Doe" (graph-osp g))))
+    ;; 30 should still be in OSP
+    (is (not (null (gethash 30 (graph-osp g)))))))
+
+(test delete-triple-normalize-rdf-type
+  "Test that rdf@type is normalized to 'a during deletion"
+  (let ((g (make-graph)))
+    ;; Add with 'a
+    (add-triple '(John a schema@Person) g)
+    ;; Delete with rdf@type (should still work)
+    (delete-triple '(John rdf@type schema@Person) g)
+    ;; Should be completely removed
+    (is (null (gethash 'John (graph-spo g))))))
+
+(test delete-triple-nonexistent
+  "Test deleting a triple that doesn't exist"
+  (let ((g (make-graph)))
+    ;; Add one triple
+    (add-triple '(John schema@name "John Doe") g)
+    ;; Try to delete a different triple
+    (delete-triple '(Jane schema@name "Jane Doe") g)
+    ;; Original triple should still exist
+    (is (not (null (gethash 'John (graph-spo g)))))))
+
+(test delete-triple-cleanup-empty-keys
+  "Test that empty keys are cleaned up with remhash"
+  (let ((g (make-graph)))
+    ;; Add and delete
+    (add-triple '(John schema@name "John Doe") g)
+    (delete-triple '(John schema@name "John Doe") g)
+    ;; Keys should be completely removed, not just empty
+    (is (= 0 (hash-table-count (graph-spo g))))
+    (is (= 0 (hash-table-count (graph-osp g))))
+    (is (= 0 (hash-table-count (graph-pos g))))))
+
+(test delete-triple-partial-removal
+  "Test removing one object from a predicate with multiple objects"
+  (let ((g (make-graph)))
+    ;; Add two objects for same subject-predicate
+    (add-triple '(John schema@knows Jane) g)
+    (add-triple '(John schema@knows Bob) g)
+    ;; Delete one
+    (delete-triple '(John schema@knows Jane) g)
+    ;; Bob should still be there
+    (let ((spo-entry (gethash 'John (graph-spo g))))
+      (is (= 1 (length (cdr (assoc 'schema@knows spo-entry)))))
+      (is (member 'Bob (cdr (assoc 'schema@knows spo-entry)))))))
+
 ;;; ============================================================================
 ;;; Phase 3: Hook System
 ;;; ============================================================================
