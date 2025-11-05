@@ -2518,17 +2518,17 @@
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 
-schema@Person rdf@type rdfs@Class .
-schema@Person rdfs@label \"Person\" .
-schema@name rdf@type rdf@Property .
-schema@name rdfs@label \"name\" ." out))
+schema:Person rdf:type rdfs:Class .
+schema:Person rdfs:label \"Person\" .
+schema:name rdf:type rdf:Property .
+schema:name rdfs:label \"name\" ." out))
 
     (import-ttl tmpfile graph)
 
     (let ((all-triples (triples '(t t t) graph)))
       (is (= 4 (length all-triples)))
-      (is (ask '((schema@Person rdf@type rdfs@Class)) graph))
-      (is (ask '((schema@name rdfs@label "name")) graph)))
+      (is (ask (graph-query '((schema@Person rdf@type rdfs@Class)) graph)))
+      (is (ask (graph-query '((schema@name rdfs@label "name")) graph))))
 
     (delete-file tmpfile)))
 
@@ -2541,11 +2541,11 @@ schema@name rdfs@label \"name\" ." out))
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 
-wn30schema@seeAlso a owl@ObjectProperty ;
-    rdfs@domain [ a owl@Class ;
-                  owl@unionOf ( wn30schema@AdjectiveWordSense wn30schema@VerbWordSense ) ] ;
-    rdfs@range [ a owl@Class ;
-                 owl@unionOf ( wn30schema@VerbWordSense wn30schema@AdjectiveWordSense ) ] ." out))
+wn30schema:seeAlso a owl:ObjectProperty ;
+    rdfs:domain [ a owl:Class ;
+                  owl:unionOf ( wn30schema:AdjectiveWordSense wn30schema:VerbWordSense ) ] ;
+    rdfs:range [ a owl:Class ;
+                 owl:unionOf ( wn30schema:VerbWordSense wn30schema:AdjectiveWordSense ) ] ." out))
 
     (import-ttl tmpfile graph)
 
@@ -2577,8 +2577,8 @@ wn30schema@seeAlso a owl@ObjectProperty ;
     (with-open-file (out tmpfile :direction :output :if-exists :supersede)
       (write-string "@prefix ex: <http://example.org/> .
 
-_:person1 ex@name \"Alice\" .
-_:person2 ex@knows _:person1 ." out))
+_:person1 ex:name \"Alice\" .
+_:person2 ex:knows _:person1 ." out))
 
     (import-ttl tmpfile graph)
 
@@ -2600,8 +2600,8 @@ _:person2 ex@knows _:person1 ." out))
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 
-frame@Killing rdfs@subClassOf [ a owl@Restriction ;
-                                 owl@onProperty frame@hasComponent ] ." out))
+frame:Killing rdfs:subClassOf [ a owl:Restriction ;
+                                 owl:onProperty frame:hasComponent ] ." out))
 
     (import-ttl tmpfile graph)
 
@@ -2625,15 +2625,15 @@ frame@Killing rdfs@subClassOf [ a owl@Restriction ;
     (with-open-file (out tmpfile :direction :output :if-exists :supersede)
       (write-string "@prefix ex: <http://example.org/> .
 
-ex@person ex@name \"John Doe\" .
-ex@person ex@age \"30\"^^<http://www.w3.org/2001/XMLSchema#integer> .
-ex@person ex@description \"A person\"@en ." out))
+ex:person ex:name \"John Doe\" .
+ex:person ex:age \"30\"^^<http://www.w3.org/2001/XMLSchema#integer> .
+ex:person ex:description \"A person\"@en ." out))
 
     (import-ttl tmpfile graph)
 
-    (is (ask '((ex@person ex@name "John Doe")) graph))
-    (is (ask '((ex@person ex@age 30)) graph))
-    (is (ask '((ex@person ex@description "A person")) graph)))
+    (is (ask (graph-query '((ex@person ex@name "John Doe")) graph)))
+    (is (ask (graph-query '((ex@person ex@age 30)) graph)))
+    (is (ask (graph-query '((ex@person ex@description "A person")) graph))))
 
     (delete-file tmpfile))
 
@@ -2645,10 +2645,10 @@ ex@person ex@description \"A person\"@en ." out))
       (write-string "@prefix ex: <http://example.org/> .
 
 # Comment line
-ex@alice ex@name \"Alice\" .
+ex:alice ex:name \"Alice\" .
 
 # Another comment
-ex@bob ex@name \"Bob\" ." out))
+ex:bob ex:name \"Bob\" ." out))
 
     (import-ttl tmpfile graph)
 
@@ -2664,11 +2664,11 @@ ex@bob ex@name \"Bob\" ." out))
     (with-open-file (out tmpfile :direction :output :if-exists :supersede)
       (write-string "@prefix ex: <http://example.org/> .
 
-ex@emptyList ex@value () ." out))
+ex:emptyList ex:value () ." out))
 
     (import-ttl tmpfile graph)
 
-    (is (ask '((ex@emptyList ex@value rdf@nil)) graph))
+    (is (ask (graph-query '((ex@emptyList ex@value rdf@nil)) graph)))
 
     (delete-file tmpfile)))
 
@@ -2679,13 +2679,13 @@ ex@emptyList ex@value () ." out))
     (with-open-file (out tmpfile :direction :output :if-exists :supersede)
       (write-string "@prefix schema: <https://schema.org/> .
 
-:hasOccupation schema@label \"has occupation\" .
-someProperty schema@label \"some property\" ." out))
+:hasOccupation schema:label \"has occupation\" .
+someProperty schema:label \"some property\" ." out))
 
     (import-ttl tmpfile graph "myschema")
 
-    (is (ask '((myschema@hasOccupation schema@label "has occupation")) graph))
-    (is (ask '((myschema@someProperty schema@label "some property")) graph))
+    (is (ask (graph-query '((myschema@hasOccupation schema@label "has occupation")) graph)))
+    (is (ask (graph-query '((myschema@someProperty schema@label "some property")) graph)))
 
     (delete-file tmpfile)))
 
