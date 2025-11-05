@@ -1092,8 +1092,12 @@ git commit -m "Implement function-name with tests"
 
 ### Current Phase
 
-🔄 **Phase 11: TTL Import** (0/? functions)
-- Next phase to be implemented
+✅ **Phase 11: TTL Import** (10/10 functions) - COMPLETE
+- register-prefix, expand-prefixed-iri, intern-rdf-resource
+- parse-ttl-value, simple-tokenize-ttl
+- parse-rdf-collection (fixes el-rdf bug), parse-blank-node-bracket
+- parse-simple-ttl-statement, parse-ttl-content, import-ttl
+- All tests passing on CI (9 comprehensive tests)
 - See lines 317-359 for details
 
 ## Next Steps
@@ -1115,7 +1119,7 @@ git commit -m "Implement function-name with tests"
 15. ✅ Complete Phase 8: Content Reference System (6/6 - large string storage with MD5 deduplication)
 16. ✅ Complete Phase 9: Serialization and Format Conversion (7/7 - save/load with el-rdf migration support)
 17. ✅ Complete Phase 10: Checkpointing System (10/10 - automatic checkpointing with metadata)
-18. 🔄 Begin Phase 11: TTL Import
+18. ✅ Complete Phase 11: TTL Import (10/10 - RDF collection bug fix, @ separator support)
 
 ---
 
