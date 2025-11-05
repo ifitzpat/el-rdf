@@ -1578,3 +1578,201 @@ Examples:
     (let ((content (uiop:read-file-string filename)))
       (parse-ttl-content graph content namespace))
     graph))
+
+;;;; Phase 12: Visualization
+
+(defun namespace (symbol)
+  "Extract namespace prefix from SYMBOL with @ separator.
+
+Arguments:
+  SYMBOL - Symbol with namespace@resource format
+
+Returns:
+  Namespace string before @ separator
+
+Examples:
+  (namespace 'foaf@name) => \"foaf\"
+  (namespace 'schema@Person) => \"schema\""
+  (let ((name (symbol-name symbol)))
+    (let ((at-pos (position #\@ name)))
+      (if at-pos
+          (subseq name 0 at-pos)
+          name))))
+
+(defun nodes (triples)
+  "Extract all unique nodes from TRIPLES (subjects, predicates, and objects).
+
+Arguments:
+  TRIPLES - List of triples
+
+Returns:
+  List of unique nodes
+
+Examples:
+  (nodes '((alice foaf@name \"Alice\"))) => (alice foaf@name \"Alice\")"
+  (remove-duplicates
+   (append (mapcar #'first triples)
+           (mapcar #'second triples)
+           (mapcar #'third triples))
+   :test #'equal))
+
+(defun literals (nodelist)
+  "Filter non-symbol nodes from NODELIST (strings, numbers, etc).
+
+Arguments:
+  NODELIST - List of nodes
+
+Returns:
+  List of literal values (non-symbols)
+
+Examples:
+  (literals '(alice \"Alice\" 30)) => (\"Alice\" 30)"
+  (remove-if #'symbolp nodelist))
+
+(defun render-triple (triple)
+  "Render TRIPLE to Graphviz DOT format.
+
+If object is a symbol, creates an edge between subject and object.
+If object is a literal, creates an edge to a generated node with box shape.
+
+Arguments:
+  TRIPLE - Triple to render
+
+Returns:
+  DOT format string
+
+Examples:
+  (render-triple '(alice foaf@knows bob))
+  => \"\\\"alice\\\" -> \\\"bob\\\" [label=\\\"foaf@knows\\\"];\\n\""
+  (destructuring-bind (subject predicate object) triple
+    (if (symbolp object)
+        (format nil "\"~A\" -> \"~A\" [label=\"~A\"];~%" subject object predicate)
+        (let ((literal-node (gensym "LIT")))
+          (format nil "\"~A\" -> \"~A\" [label=\"~A\"];~%~A [label=\"~A\",shape=box];~%"
+                  subject literal-node predicate literal-node object)))))
+
+(defun filter-triples (pattern triples)
+  "Filter TRIPLES that match PATTERN.
+
+Arguments:
+  PATTERN - Pattern with variables
+  TRIPLES - List of triples
+
+Returns:
+  List of matching triples
+
+Examples:
+  (filter-triples '($a rdf@type rdfs@Class) triples)"
+  (remove-if-not
+   (lambda (triple)
+     (let ((match (pat-match pattern triple)))
+       (and match (not (member '(nil . nil) match :test #'equal)))))
+   triples))
+
+(defun apply-node-styles (triples &optional styles)
+  "Apply styling to nodes in TRIPLES based on STYLES.
+
+Arguments:
+  TRIPLES - List of triples
+  STYLES - Alist of (namespace . plist) style definitions
+
+Returns:
+  DOT format string with node style definitions
+
+Examples:
+  (apply-node-styles triples '((\"foaf\" . (:color \"blue\"))))"
+  (let* ((all-vertices (nodes triples))
+         (all-vertices (set-difference all-vertices
+                                       '(rdf@Property rdfs@Class skos@Concept)))
+         (vertices (set-difference all-vertices (literals all-vertices))))
+    (with-output-to-string (out)
+      (dolist (node vertices)
+        (let* ((ns (namespace node))
+               (style (cdr (assoc ns styles :test #'string=)))
+               (default (cdr (assoc "default" styles :test #'string=)))
+               (color (or (getf style :color) (getf default :color)))
+               (fillcolor (or (getf style :fillcolor) (getf default :fillcolor)))
+               (fontcolor (or (getf style :fontcolor) (getf default :fontcolor))))
+          (when (or style default)
+            (format out "\"~A\" [color=\"~A\",fillcolor=\"~A\",fontcolor=\"~A\"];~%"
+                    node color fillcolor fontcolor)))))))
+
+(defun render-triples (triples &optional styles)
+  "Render TRIPLES to complete Graphviz DOT format.
+
+Arguments:
+  TRIPLES - List of triples
+  STYLES - Optional alist of style definitions
+
+Returns:
+  Complete DOT format string
+
+Examples:
+  (render-triples '((alice foaf@knows bob)))"
+  (let* ((classes (filter-triples '($a a skos@Concept) triples))
+         (properties (filter-triples '($a a rdf@Property) triples))
+         (filtered-triples (set-difference
+                            (set-difference triples properties :test #'equal)
+                            classes :test #'equal))
+         (class-style (or (cdr (assoc "class" styles :test #'string=))
+                          '(("default" . (:color "#ffff00" :fillcolor "#00ff00"
+                                          :fontcolor "white")))))
+         (property-style (or (cdr (assoc "property" styles :test #'string=))
+                             '(("default" . (:color "#00ffff" :fillcolor "#00ffff"
+                                             :fontcolor "white"))))))
+    (with-output-to-string (out)
+      (write-string "digraph G {\noverlap=prism;\n" out)
+      (write-string "node[shape=circle,style=filled,fontcolor=\"black\",fillcolor=\"white\"];\n" out)
+      (write-string "layout=\"fdp\";\nbeautify=true;\nsep=\"2\";\n" out)
+      (write-string (apply-node-styles filtered-triples styles) out)
+      (write-string (apply-node-styles classes class-style) out)
+      (write-string (apply-node-styles properties property-style) out)
+      (dolist (triple filtered-triples)
+        (write-string (render-triple triple) out))
+      (write-string "}" out))))
+
+(defun render-graph (triples filename &optional styles)
+  "Render TRIPLES to SVG file via Graphviz.
+
+Arguments:
+  TRIPLES - List of triples
+  FILENAME - Output SVG file path
+  STYLES - Optional style definitions
+
+Returns:
+  FILENAME
+
+Side Effects:
+  Creates DOT file in /tmp and calls 'dot' command
+
+Examples:
+  (render-graph triples \"/tmp/graph.svg\")"
+  (let ((dot-file "/tmp/graph.dot"))
+    (with-open-file (out dot-file :direction :output :if-exists :supersede)
+      (write-string (render-triples triples styles) out))
+    (uiop:run-program (list "dot" dot-file "-Tsvg" "-o" filename)
+                      :ignore-error-status t)
+    filename))
+
+(defun render-graph-json (triples filename &optional styles)
+  "Render TRIPLES to JSON file via Graphviz.
+
+Arguments:
+  TRIPLES - List of triples
+  FILENAME - Output JSON file path
+  STYLES - Optional style definitions
+
+Returns:
+  FILENAME
+
+Side Effects:
+  Creates DOT file in /tmp and calls 'dot' command
+
+Examples:
+  (render-graph-json triples \"/tmp/graph.json\")"
+  (let ((dot-file "/tmp/graph.dot"))
+    (with-open-file (out dot-file :direction :output :if-exists :supersede)
+      (write-string (render-triples triples styles) out))
+    (uiop:run-program (list "dot" dot-file "-Tjson" "-o" filename)
+                      :ignore-error-status t)
+    filename))

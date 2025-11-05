@@ -103,10 +103,16 @@
            #:parse-simple-ttl-statement
            #:parse-ttl-content)
 
-  ;; Visualization
-  (:export #:render-graph
-           #:render-graph-json
-           #:render-triples)
+  ;; Visualization (Phase 12)
+  (:export #:namespace
+           #:nodes
+           #:literals
+           #:render-triple
+           #:filter-triples
+           #:apply-node-styles
+           #:render-triples
+           #:render-graph
+           #:render-graph-json)
 
   ;; Format conversion (el-rdf ↔ cl-rdf)
   (:export #:el-rdf-symbol-p
