@@ -262,3 +262,49 @@ See also: REMOVE-DUAL, ADD-TRIPLE"
           orig)
         ;; Key doesn't exist - add new entry
         (append `((,key . ,(list val))) orig))))
+
+(defun remove-dual (key val orig)
+  "Remove VAL from the list of values associated with KEY in alist ORIG.
+
+This function is the inverse of UPDATE-DUAL. It removes a specific value from
+the list associated with a key. If removing the value leaves the list empty,
+the entire key entry is removed from the alist.
+
+Arguments:
+  KEY  - The key to update (typically a symbol).
+  VAL  - The value to remove from the key's list (can be any Lisp object).
+  ORIG - The original alist structure.
+
+Returns:
+  Updated alist with VAL removed from KEY's list. If the list becomes empty,
+  the KEY entry is removed entirely.
+
+Structure:
+  Input/Output format: ((key1 . (val1 val2 ...)) (key2 . (val3 val4 ...)) ...)
+
+Examples:
+  (remove-dual 'subject '(pred . obj) '((subject . ((pred . obj)))))
+  ; => NIL (empty - last value removed)
+
+  (remove-dual 'subject '(pred1 . obj1)
+               '((subject . ((pred1 . obj1) (pred2 . obj2)))))
+  ; => ((subject . ((pred2 . obj2))))
+
+  (remove-dual 'nonexistent 'val '((key . (val1 val2))))
+  ; => ((key . (val1 val2))) (unchanged - key not found)
+
+See also: UPDATE-DUAL, DELETE-TRIPLE"
+  (let* ((entry (assoc key orig))
+         (oldvals (cdr entry)))
+    (if entry
+        ;; Key exists - remove the value
+        (let ((newvals (remove val oldvals :test #'equal)))
+          (if newvals
+              ;; Still have values left - update the entry
+              (progn
+                (setf (cdr entry) newvals)
+                orig)
+              ;; No values left - remove entire key entry
+              (remove entry orig :test #'equal)))
+        ;; Key not found - return original unchanged
+        orig)))
