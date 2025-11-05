@@ -66,9 +66,18 @@
            #:remove-hook-from-graph
            #:get-graph-hooks)
 
+  ;; Content references (Phase 8)
+  (:export #:content-reference-p
+           #:store-large-content
+           #:resolve-content-reference
+           #:process-triple-object
+           #:resolve-triple-object
+           #:resolve-triple-objects)
+
   ;; Persistence
   (:export #:save-graph
-           #:load-graph)
+           #:load-graph
+           #:triples-to-string)
 
   ;; Checkpointing
   (:export #:register-graph-for-checkpointing
@@ -86,7 +95,10 @@
            #:render-triples)
 
   ;; Format conversion (el-rdf ↔ cl-rdf)
-  (:export #:convert-symbol-elisp-to-cl
-           #:convert-symbol-cl-to-elisp
-           #:load-elisp-graph
-           #:save-for-elisp))
+  (:export #:el-rdf-symbol-p
+           #:convert-symbol-el-to-cl
+           #:convert-triple-el-to-cl
+           #:convert-symbol-elisp-to-cl  ; Phase 13 (bidirectional)
+           #:convert-symbol-cl-to-elisp  ; Phase 13 (bidirectional)
+           #:load-elisp-graph            ; Phase 13
+           #:save-for-elisp))            ; Phase 13

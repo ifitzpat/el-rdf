@@ -2126,3 +2126,163 @@ Examples:
   => ((alice foaf@name \"Alice\")
       (bob foaf@bio \"<resolved content>\"))"
   (mapcar #'resolve-triple-object triples))
+
+;;;; ============================================================================
+;;;; Phase 9: Serialization and Format Conversion
+;;;; ============================================================================
+
+;;; Serialization functions for saving/loading graphs to files.
+;;; Supports auto-detection and conversion from el-rdf format (namespace:resource)
+;;; to cl-rdf format (namespace@resource).
+
+;;; -----------------------------------------------------------------------------
+;;; Triple Serialization
+;;; -----------------------------------------------------------------------------
+
+(defun triples-to-string (triples)
+  "Serialize TRIPLES to a string in Lisp readable format.
+
+Uses proper symbol escaping to handle special characters like #.
+The output can be read back with READ-FROM-STRING.
+
+Arguments:
+  TRIPLES - List of triples to serialize
+
+Returns:
+  String representation of triples
+
+Examples:
+  (triples-to-string '((alice foaf@name \"Alice\")))
+  => \"((ALICE FOAF@NAME \\\"Alice\\\"))\"
+
+  (triples-to-string '((|resource#1| foaf@name \"Test\")))
+  => \"((|resource#1| FOAF@NAME \\\"Test\\\"))\""
+  (write-to-string triples :case :downcase :readably t))
+
+;;; -----------------------------------------------------------------------------
+;;; Format Conversion (el-rdf ↔ cl-rdf)
+;;; -----------------------------------------------------------------------------
+
+(defun el-rdf-symbol-p (value)
+  "Return T if VALUE is an el-rdf format symbol (namespace:resource).
+
+El-rdf format uses colon separator (e.g., foaf:name, rdf:type).
+Cl-rdf format uses at-sign separator (e.g., foaf@name, rdf@type).
+
+Does NOT match:
+- Variables (symbols starting with $)
+- Keywords (symbols starting with :)
+- Symbols already in cl-rdf format (containing @)
+- Non-symbols
+
+Arguments:
+  VALUE - Any value to check
+
+Returns:
+  T if VALUE is el-rdf format symbol, NIL otherwise
+
+Examples:
+  (el-rdf-symbol-p 'foaf:name) => T
+  (el-rdf-symbol-p 'foaf@name) => NIL
+  (el-rdf-symbol-p '$name) => NIL"
+  (and (symbolp value)
+       (not (keywordp value))
+       (let ((name (symbol-name value)))
+         (and (> (length name) 0)
+              (not (char= (char name 0) #\$))
+              (find #\: name)
+              (not (find #\@ name))))))
+
+(defun convert-symbol-el-to-cl (value)
+  "Convert el-rdf format symbol to cl-rdf format.
+
+Replaces colon (:) with at-sign (@) in symbol names.
+Preserves non-symbols, variables, keywords, and symbols
+already in cl-rdf format.
+
+Arguments:
+  VALUE - Symbol or other value to convert
+
+Returns:
+  - New symbol with @ if VALUE is el-rdf format
+  - Original VALUE otherwise
+
+Examples:
+  (convert-symbol-el-to-cl 'foaf:name) => foaf@name
+  (convert-symbol-el-to-cl 'foaf@name) => foaf@name
+  (convert-symbol-el-to-cl '$name) => $name
+  (convert-symbol-el-to-cl \"string\") => \"string\""
+  (if (el-rdf-symbol-p value)
+      (let* ((name (symbol-name value))
+             (new-name (substitute #\@ #\: name)))
+        (intern new-name))
+    value))
+
+(defun convert-triple-el-to-cl (triple)
+  "Convert entire triple from el-rdf to cl-rdf format.
+
+Applies convert-symbol-el-to-cl to all three elements.
+
+Arguments:
+  TRIPLE - Triple in (S P O) format
+
+Returns:
+  Triple with symbols converted to cl-rdf format
+
+Examples:
+  (convert-triple-el-to-cl '(alice foaf:name \"Alice\"))
+  => (alice foaf@name \"Alice\")
+
+  (convert-triple-el-to-cl '(alice rdf:type foaf:Person))
+  => (alice rdf@type foaf@Person)"
+  (list (convert-symbol-el-to-cl (first triple))
+        (convert-symbol-el-to-cl (second triple))
+        (convert-symbol-el-to-cl (third triple))))
+
+;;; -----------------------------------------------------------------------------
+;;; Graph Persistence
+;;; -----------------------------------------------------------------------------
+
+(defun save-graph (graph filename)
+  "Save GRAPH to FILENAME in cl-rdf format.
+
+Uses raw-triples to preserve content references.
+Always saves in cl-rdf format (namespace@resource).
+
+Arguments:
+  GRAPH - The graph to save
+  FILENAME - Path to output file
+
+Side Effects:
+  Writes file to disk (overwrites if exists)
+
+Examples:
+  (save-graph my-graph \"/tmp/data.rdf\")"
+  (let ((triples (raw-triples '(t t t) graph))
+        (serialized (triples-to-string triples)))
+    (with-open-file (out filename
+                         :direction :output
+                         :if-exists :supersede
+                         :if-does-not-exist :create)
+      (write-string serialized out))))
+
+(defun load-graph (graph filename)
+  "Load triples from FILENAME into GRAPH with auto-format detection.
+
+Reads serialized triples and auto-detects format:
+- If el-rdf format (namespace:resource) detected, converts to cl-rdf
+- If cl-rdf format (namespace@resource), loads directly
+
+Arguments:
+  GRAPH - The graph to load into
+  FILENAME - Path to input file
+
+Side Effects:
+  Adds triples to GRAPH
+
+Examples:
+  (load-graph my-graph \"/tmp/data.rdf\")"
+  (with-open-file (in filename :direction :input)
+    (let* ((triples (read in))
+           (converted-triples (mapcar #'convert-triple-el-to-cl triples)))
+      (add-triples converted-triples graph))))
