@@ -902,12 +902,25 @@ git commit -m "Implement function-name with tests"
 - Currently identical (content references in Phase 8)
 - 10 comprehensive test cases covering all query patterns
 
+✅ **Phase 5: Pattern Matching** (5/5 functions)
+- `augmented-eq` - Type-aware equality comparison
+- `pat-match` - Pattern matching with variable bindings
+- `ensure-lparallel-kernel` - Lazy kernel initialization for parallel ops
+- `traverse-graph` - Apply pattern to triples, return bindings (✅ parallel with pmap for 100+ triples)
+- `filter-triples` - Filter triples by pattern (✅ parallel with premove-if for 100+ triples)
+
+**Implementation Notes**:
+- Uses `nconc` instead of `append` for performance (destructive but faster)
+- Not tail-recursive but acceptable for shallow RDF patterns
+- lparallel integration with 100+ triple threshold
+- All functions under 30-line limit
+- 20 comprehensive test cases covering all scenarios
+
 ### Current Phase
 
-🔄 **Phase 5: Pattern Matching** (0/3 functions)
-- `augmented-eq` - Equality that handles strings/numbers
-- `pat-match` - Pattern matching against input
-- `traverse-graph` / `filter-triples` - Graph traversal
+🔄 **Phase 6: Query Execution Engine** (0/? functions)
+- Next phase to be implemented
+- See lines 207-226 for details
 
 ## Next Steps
 
@@ -922,7 +935,8 @@ git commit -m "Implement function-name with tests"
 9. ✅ Complete Phase 2: Triple Storage + Threading (7/7)
 10. ✅ Complete Phase 3: Hook System (3/3)
 11. ✅ Complete Phase 4: Triple Retrieval (2/2)
-12. 🔄 Begin Phase 5: Pattern Matching
+12. ✅ Complete Phase 5: Pattern Matching (5/5)
+13. 🔄 Begin Phase 6: Query Execution Engine
 
 ---
 
