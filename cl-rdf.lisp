@@ -507,16 +507,19 @@ See also: TRIPLES, RAW-TRIPLES"
              (threads nil))
         ;; Spawn threads to process chunks in parallel
         (dolist (chunk chunks)
-          (push (bt:make-thread
-                 (lambda ()
-                   (loop for (key . values) in chunk
-                         nconc (loop for value in values
-                                     collect (ecase reorder
-                                               ((nil) (list element key value))
-                                               (:osp  (list key value element))
-                                               (:pos  (list value element key))))))
-                 :name "expand-duals-worker")
-                threads))
+          (let ((c chunk)  ; Capture chunk by value
+                (elem element)
+                (reord reorder))
+            (push (bt:make-thread
+                   (lambda ()
+                     (loop for (key . values) in c
+                           nconc (loop for value in values
+                                       collect (ecase reord
+                                                 ((nil) (list elem key value))
+                                                 (:osp  (list key value elem))
+                                                 (:pos  (list value elem key))))))
+                   :name "expand-duals-worker")
+                  threads)))
         ;; Join threads and collect results
         (dolist (thread (reverse threads))
           (push (bt:join-thread thread) results))
@@ -581,11 +584,13 @@ See also: ADD-TRIPLE, DELETE-TRIPLES, GRAPH-ADD-HOOKS"
              (threads nil))
         ;; Spawn threads to add triples in parallel
         (dolist (chunk chunks)
-          (push (bt:make-thread
-                 (lambda ()
-                   (mapc (lambda (triple) (add-triple triple graph)) chunk))
-                 :name "add-triples-worker")
-                threads))
+          (let ((c chunk)  ; Capture chunk by value
+                (g graph))
+            (push (bt:make-thread
+                   (lambda ()
+                     (mapc (lambda (triple) (add-triple triple g)) c))
+                   :name "add-triples-worker")
+                  threads)))
         ;; Wait for all additions to complete before calling hooks
         (mapc #'bt:join-thread threads)))
 
@@ -650,11 +655,13 @@ See also: DELETE-TRIPLE, ADD-TRIPLES, GRAPH-DELETE-HOOKS"
              (threads nil))
         ;; Spawn threads to delete triples in parallel
         (dolist (chunk chunks)
-          (push (bt:make-thread
-                 (lambda ()
-                   (mapc (lambda (triple) (delete-triple triple graph)) chunk))
-                 :name "delete-triples-worker")
-                threads))
+          (let ((c chunk)  ; Capture chunk by value
+                (g graph))
+            (push (bt:make-thread
+                   (lambda ()
+                     (mapc (lambda (triple) (delete-triple triple g)) c))
+                   :name "delete-triples-worker")
+                  threads)))
         ;; Wait for all deletions to complete before calling hooks
         (mapc #'bt:join-thread threads)))
 
