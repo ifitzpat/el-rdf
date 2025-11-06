@@ -46,7 +46,7 @@ jobs:
             sbcl --non-interactive --load quicklisp.lisp \
               --eval "(quicklisp-quickstart:install :path \"$HOME/quicklisp/\")"
           else
-            ecl -norc -shell quicklisp.lisp \
+            ecl -norc -load quicklisp.lisp \
               -eval "(quicklisp-quickstart:install :path \"$HOME/quicklisp/\")" \
               -eval '(ext:quit)'
           fi
