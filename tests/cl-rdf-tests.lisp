@@ -1333,7 +1333,7 @@
                        (lambda (g op data)
                          (setf hook-called t)))
     (graph-query '(($s foaf@name $name)) graph)
-    (is hook-called)))
+    (is (eq t hook-called))))
 
 (test graph-query-handler-can-override-error
   "Test caller can override pattern-match-failure with custom handler"
@@ -1580,7 +1580,7 @@
                          (declare (ignore g op data))
                          (setf hook-called t)))
     (delete-data '((alice foaf@name "Alice")) graph)
-    (is hook-called)))
+    (is (eq t hook-called))))
 
 ;;; ============================================================================
 ;;; Phase 7: Additional query operations (SELECT, FILTER)
