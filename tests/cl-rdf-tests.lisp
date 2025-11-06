@@ -2806,7 +2806,7 @@ someProperty schema:label \"some property\" ." out))
       (error (e)
         ;; Skip test if Graphviz not installed
         (format t "~%Skipping render-graph test (Graphviz not available): ~A~%" e)
-        (is t))))) ; Pass test anyway
+        (is (eq t t)))))) ; Pass test anyway
 
 (test render-graph-json-to-json
   "Test rendering graph to JSON file via Graphviz"
@@ -2823,7 +2823,7 @@ someProperty schema:label \"some property\" ." out))
       (error (e)
         ;; Skip test if Graphviz not installed
         (format t "~%Skipping render-graph-json test (Graphviz not available): ~A~%" e)
-        (is t))))) ; Pass test anyway
+        (is (eq t t)))))) ; Pass test anyway
 
 ;;; ============================================================================
 ;;; Phase 13: Bidirectional Format Conversion (cl-rdf → el-rdf)
