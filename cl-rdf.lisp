@@ -211,7 +211,7 @@ Examples:
       (dolist (triple triples)
         (add-triple triple graph))
       ;; Large dataset - parallel processing
-      (let* ((num-threads (min 4 (or (ignore-errors (sb-ext:cpu-count)) 4)))
+      (let* ((num-threads 4)  ; Hardcoded: 4 threads for parallel processing
              (chunk-size (ceiling (/ (length triples) num-threads)))
              (chunks (loop for i from 0 below (length triples) by chunk-size
                            collect (subseq triples i (min (+ i chunk-size)
@@ -311,7 +311,7 @@ Examples:
       (dolist (triple triples)
         (delete-triple triple graph))
       ;; Large dataset - parallel processing
-      (let* ((num-threads (min 4 (or (ignore-errors (sb-ext:cpu-count)) 4)))
+      (let* ((num-threads 4)  ; Hardcoded: 4 threads for parallel processing
              (chunk-size (ceiling (/ (length triples) num-threads)))
              (chunks (loop for i from 0 below (length triples) by chunk-size
                            collect (subseq triples i (min (+ i chunk-size)
@@ -442,7 +442,7 @@ Examples:
        (lambda (pair) (%expand-dual-entry key pair index-type))
        alist)
       ;; Large dataset - parallel processing
-      (let* ((num-threads (min 4 (or (ignore-errors (sb-ext:cpu-count)) 4)))
+      (let* ((num-threads 4)  ; Hardcoded: 4 threads for parallel processing
              (chunk-size (ceiling (/ (length alist) num-threads)))
              (chunks (loop for i from 0 below (length alist) by chunk-size
                            collect (subseq alist i (min (+ i chunk-size)
