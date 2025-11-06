@@ -44,10 +44,10 @@ jobs:
           curl -O https://beta.quicklisp.org/quicklisp.lisp
           if [ "${{ matrix.lisp }}" = "sbcl" ]; then
             sbcl --non-interactive --load quicklisp.lisp \
-              --eval '(quicklisp-quickstart:install :path "~/quicklisp/")'
+              --eval "(quicklisp-quickstart:install :path \"$HOME/quicklisp/\")"
           else
             ecl -norc -shell quicklisp.lisp \
-              -eval '(quicklisp-quickstart:install :path "~/quicklisp/")' \
+              -eval "(quicklisp-quickstart:install :path \"$HOME/quicklisp/\")" \
               -eval '(ext:quit)'
           fi
 
@@ -55,7 +55,7 @@ jobs:
         run: |
           if [ "${{ matrix.lisp }}" = "sbcl" ]; then
             sbcl --non-interactive \
-              --load ~/quicklisp/setup.lisp \
+              --load "$HOME/quicklisp/setup.lisp" \
               --eval '(push (truename ".") asdf:*central-registry*)' \
               --eval '(format t "~%~%========================================~%")' \
               --eval '(format t "Loading cl-rdf test system...~%")' \
@@ -74,7 +74,7 @@ jobs:
                               (format t "~%~%✗ Some tests failed!~%~%")
                               (uiop:quit 1))))'
           else
-            ecl -norc -load ~/quicklisp/setup.lisp \
+            ecl -norc -load "$HOME/quicklisp/setup.lisp" \
               -eval '(push (truename ".") asdf:*central-registry*)' \
               -eval '(format t "~%~%========================================~%")' \
               -eval '(format t "Loading cl-rdf test system...~%")' \
