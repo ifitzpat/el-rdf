@@ -5,7 +5,7 @@
 ;; Author: Ian FitzPatrick ian@ianfitzpatrick.eu
 ;; URL: codeberg.org/ifitzpat/el-rdf
 ;; Version: 0.2.1
-;; Package-Requires: ((emacs "27.1")(request)(dash "20250312.1307"))
+;; Package-Requires: ((emacs "27.1")(plz "0.7")(dash "20250312.1307"))
 ;; Keywords: rdf triple-store
 
 ;; This file is not part of GNU Emacs
@@ -30,6 +30,8 @@
 ;;; Code:
 (require 'dash)
 (require 'cl-seq)
+(require 'eieio)
+(require 'cl-lib)
 ;; (require 'uuidgen)  ; Commented out for testing
 
 ;; Increase macro expansion limits to handle large datasets
@@ -114,38 +116,115 @@ Uses MD5 hash of content as filename for deduplication."
   "Resolve triple object, loading content from reference if needed."
   (el-rdf--resolve-content-reference obj))
 
+;;;; EIEIO Class Definitions
+
+(defclass el-rdf-graph ()
+  ((name
+    :initarg :name
+    :initform nil
+    :accessor graph-name
+    :documentation "Optional name for graph identification")
+   (hooks
+    :initform '((add-hooks . nil)
+                (delete-hooks . nil)
+                (query-hooks . nil))
+    :accessor graph-hooks
+    :documentation "Hook system for graph operations"))
+  (:documentation "Abstract base class for all graph types (local and remote)"))
+
+(defclass el-rdf-local-graph (el-rdf-graph)
+  ((spo
+    :initform (make-hash-table :test 'eq)
+    :accessor graph-spo
+    :documentation "Subject-Predicate-Object index")
+   (osp
+    :initform (make-hash-table :test 'equal)
+    :accessor graph-osp
+    :documentation "Object-Subject-Predicate index")
+   (pos
+    :initform (make-hash-table :test 'eq)
+    :accessor graph-pos
+    :documentation "Predicate-Object-Subject index")
+   (prefixes
+    :initform nil
+    :accessor graph-prefixes
+    :documentation "Namespace prefix alist for TTL import"))
+  (:documentation "Local in-memory RDF graph with triple indices"))
+
+(defclass el-rdf-remote-graph (el-rdf-graph)
+  ((endpoint
+    :initarg :endpoint
+    :accessor graph-endpoint
+    :documentation "Base URL of cl-rdf server (e.g., http://localhost:8080)")
+   (graph-name
+    :initarg :graph-name
+    :accessor remote-graph-name
+    :documentation "Name of graph on remote cl-rdf server")
+   (token
+    :initarg :token
+    :initform nil
+    :accessor graph-token
+    :documentation "Bearer token for authentication")
+   (timeout
+    :initarg :timeout
+    :initform 60
+    :accessor graph-timeout
+    :documentation "Request timeout in seconds")
+   (cache
+    :initform (make-hash-table :test 'equal)
+    :accessor graph-cache
+    :documentation "Query result cache"))
+  (:documentation "Remote RDF graph accessed via HTTP to cl-rdf server"))
+
 (defun make-graph (&optional name)
   "Create a new RDF graph with optional NAME for checkpointing.
-If NAME is provided, the graph can be easily saved/restored by name."
-`((spo . ,(make-hash-table :test 'eq))
-  	(osp . ,(make-hash-table :test 'equal))
-  	(pos . ,(make-hash-table :test 'eq))
-  	(hooks . ((add-hooks . ,(list))
-  	          (delete-hooks . ,(list))
-  	          (query-hooks . ,(list))))
-  	(prefixes . ())
-  	(name . ,name)))
+If NAME is provided, the graph can be easily saved/restored by name.
+Returns an el-rdf-local-graph instance."
+  (make-instance 'el-rdf-local-graph :name name))
+
+(defun make-remote-graph (endpoint graph-name &rest args)
+  "Create a remote graph client connected to cl-rdf server.
+ENDPOINT: Base URL of cl-rdf server (e.g., \"http://localhost:8080\")
+GRAPH-NAME: Name of graph on remote server
+ARGS: Optional keyword args :token, :timeout, :name
+
+Example:
+  (make-remote-graph \"http://localhost:8080\" \"my-graph\"
+                     :token \"secret\" :timeout 30)"
+  (apply #'make-instance 'el-rdf-remote-graph
+         :endpoint endpoint
+         :graph-name graph-name
+         args))
 
 ;; Helper functions for hook management
-(defun add-hook-to-graph (graph hook-type hook-function)
+(cl-defgeneric add-hook-to-graph (graph hook-type hook-function)
   "Add HOOK-FUNCTION to HOOK-TYPE hooks in GRAPH.
-HOOK-TYPE should be 'add-hooks, 'delete-hooks, or 'query-hooks."
-  (let* ((hooks (cdr (assoc 'hooks graph)))
+HOOK-TYPE should be 'add-hooks, 'delete-hooks, or 'query-hooks.")
+
+(cl-defmethod add-hook-to-graph ((graph el-rdf-graph) hook-type hook-function)
+  "Add hook to graph (works for all graph types)."
+  (let* ((hooks (graph-hooks graph))
          (hook-entry (assoc hook-type hooks))
          (hook-list (cdr hook-entry)))
     (unless (member hook-function hook-list)
       (setf (cdr hook-entry) (cons hook-function hook-list)))))
 
-(defun remove-hook-from-graph (graph hook-type hook-function)
-  "Remove HOOK-FUNCTION from HOOK-TYPE hooks in GRAPH."
-  (let* ((hooks (cdr (assoc 'hooks graph)))
+(cl-defgeneric remove-hook-from-graph (graph hook-type hook-function)
+  "Remove HOOK-FUNCTION from HOOK-TYPE hooks in GRAPH.")
+
+(cl-defmethod remove-hook-from-graph ((graph el-rdf-graph) hook-type hook-function)
+  "Remove hook from graph (works for all graph types)."
+  (let* ((hooks (graph-hooks graph))
          (hook-list (cdr (assoc hook-type hooks))))
     (setf (cdr (assoc hook-type hooks))
           (remove hook-function hook-list))))
 
-(defun get-graph-hooks (graph hook-type)
-  "Get all hooks of HOOK-TYPE from GRAPH."
-  (cdr (assoc hook-type (cdr (assoc 'hooks graph)))))
+(cl-defgeneric get-graph-hooks (graph hook-type)
+  "Get all hooks of HOOK-TYPE from GRAPH.")
+
+(cl-defmethod get-graph-hooks ((graph el-rdf-graph) hook-type)
+  "Get hooks from graph (works for all graph types)."
+  (cdr (assoc hook-type (graph-hooks graph))))
 
 ;; Checkpointing functions
 (defun el-rdf-register-graph-for-checkpointing (graph graph-name)
@@ -160,23 +239,23 @@ The graph will be checkpointed automatically when add-hooks are triggered."
 GRAPH is the graph being operated on, OPERATION is the operation type,
 DATA is the operation data (triples list)."
   (let ((checkpoint-info (gethash graph el-rdf-graph-checkpoints))
-        (graph-name (cdr (assoc 'name graph))))
+        (gname (graph-name graph)))
     (when checkpoint-info
       (let* ((registered-name (car checkpoint-info))
              ;; Use graph's internal name if available, fall back to registered name
-             (actual-name (or graph-name registered-name))
+             (actual-name (or gname registered-name))
              (checkpoint-file (el-rdf-checkpoint-file-path actual-name)))
         (when el-rdf-debug
           (princ (format "DEBUG: Hook checkpointing %s to %s after %s\n"
-                         graph-name checkpoint-file operation)))
+                         gname checkpoint-file operation)))
         ;; Save the graph data
         (save-graph graph checkpoint-file)
 
         ;; Save metadata
-        (el-rdf-save-checkpoint-metadata graph-name operation data)
+        (el-rdf-save-checkpoint-metadata gname operation data)
 
         ;; Update last checkpoint time
-        (puthash graph (cons graph-name (current-time)) el-rdf-graph-checkpoints)))))
+        (puthash graph (cons gname (current-time)) el-rdf-graph-checkpoints)))))
 
 (defun el-rdf-checkpoint-file-path (graph-name)
   "Generate checkpoint file path for a named graph."
@@ -318,30 +397,30 @@ Removes both the main checkpoint file and any associated metadata file."
         ;; Key not found, return original unchanged
         orig)))
 
-  (defun add-triple (triple graph)
+  (cl-defgeneric add-triple (triple graph)
+    "Add a single TRIPLE to GRAPH.")
+
+  (cl-defmethod add-triple (triple (graph el-rdf-local-graph))
+    "Add a single triple to local graph."
     (let* ((newsub (nth 0 triple))
   	 (newpred (if (eq (nth 1 triple) 'rdf:type) 'a (nth 1 triple))) ; Normalize rdf:type to 'a'
   	 (newobj (el-rdf--process-triple-object (nth 2 triple))) ; Store large content as reference
-	 ;(for-debug (princ (format "\n\nadding %s %s %s\n\n" newsub newpred newobj)))
-  	 (spo (cdr (assoc 'spo graph)))
-  	 (osp (cdr (assoc 'osp graph)))
-  	 (pos (cdr (assoc 'pos graph)))
+  	 (spo (graph-spo graph))
+  	 (osp (graph-osp graph))
+  	 (pos (graph-pos graph))
   	 (po (gethash newsub spo)) ; alist ((p . (o1 o2 o3)))
   	 (sp (gethash newobj osp)) ; alist ((s . (p1 p2 p3)))
   	 (os (gethash newpred pos))) ; alist ((o . (s1 s2 s3)))
       (if po ; a triple with that subject exists
           (progn
-	  ;  (princ (format "subject exists %s\n\n" newsub))
-	    (puthash newsub (update-dual newpred newobj po) spo) )
+	    (puthash newsub (update-dual newpred newobj po) spo))
         (puthash newsub `((,newpred . ,(list newobj))) spo))
       (if sp
           (puthash newobj (update-dual newsub newpred sp) osp)
         (puthash newobj `((,newsub . ,(list newpred))) osp))
       (if os
           (puthash newpred (update-dual newobj newsub os) pos)
-        (puthash newpred `((,newobj . ,(list newsub))) pos))
-      ;; maybe refactor into cond
-      ))
+        (puthash newpred `((,newobj . ,(list newsub))) pos))))
 
   (defun delete-triple (triple graph)
     "Remove a triple from the graph, updating all three indices (SPO, OSP, POS).
