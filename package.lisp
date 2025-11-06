@@ -14,7 +14,7 @@
 
 Threading:
   SBCL - Parallel processing with bordeaux-threads for large datasets (100+ items)
-  ECL  - Sequential processing (no threading overhead)"))
+  ECL  - Sequential processing (no threading overhead)")
 
   ;; Core graph classes and operations
   (:export #:graph              ; Abstract base class
