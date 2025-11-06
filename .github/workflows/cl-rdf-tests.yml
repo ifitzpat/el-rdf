@@ -28,7 +28,7 @@ jobs:
       matrix:
         lisp:
           - sbcl
-          # ECL disabled temporarily - SBCL working perfectly
+          - ecl  # Now enabled with ECL-specific threading support
 
     steps:
       - name: Checkout code

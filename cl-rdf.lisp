@@ -28,7 +28,11 @@
          :documentation "Optional name for the graph")
    (prefixes :initform nil
              :accessor graph-prefixes
-             :documentation "Alist of (prefix . namespace-uri) for TTL import"))
+             :documentation "Alist of (prefix . namespace-uri) for TTL import")
+   #+sbcl
+   (lock :initform (make-lock "graph-lock")
+         :reader graph-lock
+         :documentation "Mutex for thread-safe operations (SBCL only)"))
   (:documentation "In-memory RDF graph with triple indices and hooks"))
 
 (defmethod print-object ((graph local-graph) stream)
@@ -147,36 +151,48 @@ Examples:
     (unless (member value current-list :test #'equal)
       (setf (cdr entry) (cons value current-list)))))
 
-(defun add-triple (triple graph)
-  "Add a single triple to GRAPH.
+(defgeneric add-triple (triple graph)
+  (:documentation "Add a single triple to GRAPH.
 
 Arguments:
   TRIPLE - List of (subject predicate object)
-  GRAPH - local-graph instance
+  GRAPH - Graph instance
 
 Side Effects:
-  Updates all three indices (SPO, OSP, POS)
+  Updates graph storage
   Normalizes 'a' and rdf@type to 'a'
 
 Examples:
   (add-triple '(alice foaf@name \"Alice\") graph)
-  (add-triple '(bob rdf@type foaf@Person) graph)"
+  (add-triple '(bob rdf@type foaf@Person) graph)"))
+
+#+sbcl
+(defmethod add-triple (triple (graph local-graph))
+  "Add triple to local graph with thread-safe locking (SBCL)."
   (destructuring-bind (s p o) triple
-    ;; Normalize rdf@type and 'a' to 'a'
     (let ((normalized-p (if (eq p 'rdf@type) 'a p)))
-      ;; Add to SPO index
+      ;; Thread-safe update with mutex
+      (with-lock-held ((graph-lock graph))
+        (%add-to-nested-list s normalized-p o (graph-spo graph))
+        (%add-to-nested-list o s normalized-p (graph-osp graph))
+        (%add-to-nested-list normalized-p o s (graph-pos graph))))))
+
+#+ecl
+(defmethod add-triple (triple (graph local-graph))
+  "Add triple to local graph (ECL - no threading)."
+  (destructuring-bind (s p o) triple
+    (let ((normalized-p (if (eq p 'rdf@type) 'a p)))
+      ;; Direct updates, no locking overhead
       (%add-to-nested-list s normalized-p o (graph-spo graph))
-      ;; Add to OSP index
       (%add-to-nested-list o s normalized-p (graph-osp graph))
-      ;; Add to POS index
       (%add-to-nested-list normalized-p o s (graph-pos graph)))))
 
-(defun add-triples (triples graph)
-  "Add multiple triples to GRAPH and trigger add-hooks.
+(defgeneric add-triples (triples graph)
+  (:documentation "Add multiple triples to GRAPH and trigger add-hooks.
 
 Arguments:
   TRIPLES - List of triples to add
-  GRAPH - local-graph instance
+  GRAPH - Graph instance
 
 Side Effects:
   Adds all triples via add-triple
@@ -184,10 +200,44 @@ Side Effects:
 
 Examples:
   (add-triples '((alice foaf@name \"Alice\")
-                 (bob foaf@name \"Bob\")) graph)"
+                 (bob foaf@name \"Bob\")) graph)"))
+
+#+sbcl
+(defmethod add-triples (triples (graph local-graph))
+  "Add multiple triples with parallel processing for large datasets (SBCL)."
+  ;; Use parallel processing for 100+ triples
+  (if (< (length triples) 100)
+      ;; Small dataset - sequential
+      (dolist (triple triples)
+        (add-triple triple graph))
+      ;; Large dataset - parallel processing
+      (let* ((num-threads (min 4 (or (ignore-errors (sb-ext:cpu-count)) 4)))
+             (chunk-size (ceiling (/ (length triples) num-threads)))
+             (chunks (loop for i from 0 below (length triples) by chunk-size
+                           collect (subseq triples i (min (+ i chunk-size)
+                                                          (length triples)))))
+             (threads nil))
+        ;; Spawn threads to add triples in parallel
+        (dolist (chunk chunks)
+          (push (make-thread
+                 (lambda (c)
+                   (dolist (triple c)
+                     (add-triple triple graph)))
+                 :arguments (list chunk)
+                 :name "add-triples-worker")
+                threads))
+        ;; Wait for all additions to complete
+        (mapc #'join-thread threads)))
+  ;; Call hooks after all triples added
+  (dolist (hook (graph-add-hooks graph))
+    (funcall hook graph 'add-triples triples)))
+
+#+ecl
+(defmethod add-triples (triples (graph local-graph))
+  "Add multiple triples sequentially (ECL - no threading)."
   (dolist (triple triples)
     (add-triple triple graph))
-  ;; Trigger hooks
+  ;; Call hooks
   (dolist (hook (graph-add-hooks graph))
     (funcall hook graph 'add-triples triples)))
 
@@ -202,34 +252,47 @@ Examples:
         (setf (gethash key1 hash-table)
               (remove key2 alist :key #'car :test #'eq))))))
 
-(defun delete-triple (triple graph)
-  "Delete a single triple from GRAPH.
+(defgeneric delete-triple (triple graph)
+  (:documentation "Delete a single triple from GRAPH.
 
 Arguments:
   TRIPLE - List of (subject predicate object)
-  GRAPH - local-graph instance
+  GRAPH - Graph instance
 
 Side Effects:
-  Removes from all three indices (SPO, OSP, POS)
+  Removes from graph storage
   Normalizes 'a' and rdf@type to 'a'
 
 Examples:
-  (delete-triple '(alice foaf@name \"Alice\") graph)"
+  (delete-triple '(alice foaf@name \"Alice\") graph)"))
+
+#+sbcl
+(defmethod delete-triple (triple (graph local-graph))
+  "Delete triple from local graph with thread-safe locking (SBCL)."
   (destructuring-bind (s p o) triple
     (let ((normalized-p (if (eq p 'rdf@type) 'a p)))
-      ;; Remove from SPO index
+      ;; Thread-safe update with mutex
+      (with-lock-held ((graph-lock graph))
+        (%remove-from-nested-list s normalized-p o (graph-spo graph))
+        (%remove-from-nested-list o s normalized-p (graph-osp graph))
+        (%remove-from-nested-list normalized-p o s (graph-pos graph))))))
+
+#+ecl
+(defmethod delete-triple (triple (graph local-graph))
+  "Delete triple from local graph (ECL - no threading)."
+  (destructuring-bind (s p o) triple
+    (let ((normalized-p (if (eq p 'rdf@type) 'a p)))
+      ;; Direct updates, no locking overhead
       (%remove-from-nested-list s normalized-p o (graph-spo graph))
-      ;; Remove from OSP index
       (%remove-from-nested-list o s normalized-p (graph-osp graph))
-      ;; Remove from POS index
       (%remove-from-nested-list normalized-p o s (graph-pos graph)))))
 
-(defun delete-triples (triples graph)
-  "Delete multiple triples from GRAPH and trigger delete-hooks.
+(defgeneric delete-triples (triples graph)
+  (:documentation "Delete multiple triples from GRAPH and trigger delete-hooks.
 
 Arguments:
   TRIPLES - List of triples to delete
-  GRAPH - local-graph instance
+  GRAPH - Graph instance
 
 Side Effects:
   Deletes all triples via delete-triple
@@ -237,10 +300,44 @@ Side Effects:
 
 Examples:
   (delete-triples '((alice foaf@name \"Alice\")
-                    (bob foaf@name \"Bob\")) graph)"
+                    (bob foaf@name \"Bob\")) graph)"))
+
+#+sbcl
+(defmethod delete-triples (triples (graph local-graph))
+  "Delete multiple triples with parallel processing for large datasets (SBCL)."
+  ;; Use parallel processing for 100+ triples
+  (if (< (length triples) 100)
+      ;; Small dataset - sequential
+      (dolist (triple triples)
+        (delete-triple triple graph))
+      ;; Large dataset - parallel processing
+      (let* ((num-threads (min 4 (or (ignore-errors (sb-ext:cpu-count)) 4)))
+             (chunk-size (ceiling (/ (length triples) num-threads)))
+             (chunks (loop for i from 0 below (length triples) by chunk-size
+                           collect (subseq triples i (min (+ i chunk-size)
+                                                          (length triples)))))
+             (threads nil))
+        ;; Spawn threads to delete triples in parallel
+        (dolist (chunk chunks)
+          (push (make-thread
+                 (lambda (c)
+                   (dolist (triple c)
+                     (delete-triple triple graph)))
+                 :arguments (list chunk)
+                 :name "delete-triples-worker")
+                threads))
+        ;; Wait for all deletions to complete
+        (mapc #'join-thread threads)))
+  ;; Call hooks after all triples deleted
+  (dolist (hook (graph-delete-hooks graph))
+    (funcall hook graph 'delete-triples triples)))
+
+#+ecl
+(defmethod delete-triples (triples (graph local-graph))
+  "Delete multiple triples sequentially (ECL - no threading)."
   (dolist (triple triples)
     (delete-triple triple graph))
-  ;; Trigger hooks
+  ;; Call hooks
   (dolist (hook (graph-delete-hooks graph))
     (funcall hook graph 'delete-triples triples)))
 
@@ -321,8 +418,56 @@ Examples:
                 (pos (list value key dual-key))))
             values)))
 
+#+sbcl
 (defun expand-duals (alist key &optional (index-type 'spo))
-  "Expand nested alist structure into flat list of triples.
+  "Expand nested alist structure into flat list of triples with parallel processing (SBCL).
+
+Arguments:
+  ALIST - Nested alist from hash table
+  KEY - Primary key for the index
+  INDEX-TYPE - One of 'spo, 'osp, 'pos (default 'spo)
+
+Returns:
+  List of triples
+
+For large datasets (100+ entries), uses parallel processing for performance.
+
+Examples:
+  (expand-duals '((foaf@name . (\"Alice\" \"Bob\"))) 'alice 'spo)
+  => ((alice foaf@name \"Alice\") (alice foaf@name \"Bob\"))"
+  ;; Use parallel processing for 100+ entries
+  (if (< (length alist) 100)
+      ;; Small dataset - sequential
+      (alexandria:mappend
+       (lambda (pair) (%expand-dual-entry key pair index-type))
+       alist)
+      ;; Large dataset - parallel processing
+      (let* ((num-threads (min 4 (or (ignore-errors (sb-ext:cpu-count)) 4)))
+             (chunk-size (ceiling (/ (length alist) num-threads)))
+             (chunks (loop for i from 0 below (length alist) by chunk-size
+                           collect (subseq alist i (min (+ i chunk-size)
+                                                        (length alist)))))
+             (threads nil)
+             (results nil))
+        ;; Spawn threads to process chunks in parallel
+        (dolist (chunk chunks)
+          (push (make-thread
+                 (lambda (c k idx)
+                   (alexandria:mappend
+                    (lambda (pair) (%expand-dual-entry k pair idx))
+                    c))
+                 :arguments (list chunk key index-type)
+                 :name "expand-duals-worker")
+                threads))
+        ;; Join threads and collect results
+        (dolist (thread (reverse threads))
+          (push (join-thread thread) results))
+        ;; Flatten results
+        (apply #'append (reverse results)))))
+
+#+ecl
+(defun expand-duals (alist key &optional (index-type 'spo))
+  "Expand nested alist structure into flat list of triples (ECL - sequential).
 
 Arguments:
   ALIST - Nested alist from hash table

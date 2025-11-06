@@ -2,19 +2,19 @@
 
 (defpackage #:cl-rdf
   (:use #:cl #:alexandria)
+  ;; Threading support (SBCL only)
+  #+sbcl
   (:import-from #:bordeaux-threads
                 #:make-lock
                 #:with-lock-held
                 #:make-thread
                 #:join-thread)
-  (:import-from #:lparallel
-                #:pmap
-                #:premove-if
-                #:*kernel*
-                #:make-kernel
-                #:end-kernel)
   (:import-from #:log4cl)
-  (:documentation "In-memory RDF triple store for Common Lisp")
+  (:documentation "In-memory RDF triple store for Common Lisp
+
+Threading:
+  SBCL - Parallel processing with bordeaux-threads for large datasets (100+ items)
+  ECL  - Sequential processing (no threading overhead)"))
 
   ;; Core graph classes and operations
   (:export #:graph              ; Abstract base class

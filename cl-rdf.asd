@@ -10,8 +10,7 @@
   :source-control (:git "https://github.com/ifitzpat/el-rdf.git")
 
   :depends-on (#:alexandria
-               #:bordeaux-threads  ; For threading/parallelization
-               #:lparallel         ; For parallel map/reduce operations
+               #+sbcl #:bordeaux-threads  ; Threading for SBCL (parallel processing)
                #:ironclad          ; For MD5 hashing (content references)
                #:log4cl            ; Logging framework
                #:cl-ppcre          ; Regular expressions (TTL import)
@@ -102,8 +101,7 @@
   :source-control (:git "https://github.com/ifitzpat/el-rdf.git")
 
   :depends-on (#:alexandria
-               #:bordeaux-threads
-               #:lparallel
+               #+sbcl #:bordeaux-threads
                #:ironclad
                #:log4cl
                #:cl-ppcre
