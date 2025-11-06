@@ -122,6 +122,205 @@ We're proceeding with **Option B** for the following reasons:
 3. **Incremental Development** - Can implement one operation at a time
 4. **No Additional Dependencies** - Works with standard Emacs Lisp
 
+## Hook Architecture for Remote Graphs
+
+### The Dual Context Problem
+
+The existing hook system (`add-hooks`, `delete-hooks`, `query-hooks`) allows users to register functions that run when graph operations occur. For remote graphs, we need to consider **two different execution contexts**:
+
+#### 1. Client-Side Hooks (Most Common)
+
+These should run **in Emacs**, on the client machine:
+
+- **LLM calls** - Sending triples to language models for analysis
+- **Logging/debugging** - Recording operations locally
+- **Validation** - Checking data before sending to remote
+- **Client-side caching** - Storing frequently accessed results
+- **UI updates** - Updating Emacs buffers or displays
+- **Local transformations** - Preprocessing data before remote storage
+
+**Example:**
+```elisp
+(defun llm-analysis-hook (graph operation data)
+  "Send new triples to LLM for entity extraction."
+  (when (eq operation 'add-triples)
+    (let ((analysis (call-llm-api data)))
+      (process-llm-response analysis))))
+
+(add-hook-to-graph my-remote-graph 'add-hooks #'llm-analysis-hook)
+```
+
+#### 2. Server-Side Operations (Specialized)
+
+These should run **on the SPARQL endpoint**, on the server:
+
+- **Inference/reasoning** - OWL/RDFS entailment, rule engines
+- **Server-side validation** - SHACL constraints, custom rules
+- **Triggers** - Database-level operations on triple changes
+- **Indexing** - Full-text search, spatial indexes
+
+**Key insight:** We **cannot** directly execute Elisp code on the remote endpoint. Server-side operations must be configured on the endpoint itself.
+
+### Proposed Solution: Layered Hook System
+
+#### Layer 1: Client-Side Hooks (Implemented in el-rdf)
+
+**All hooks run on the client** by default. For remote graphs:
+
+1. **Pre-operation hooks** run before HTTP request
+2. HTTP request sent to endpoint
+3. **Post-operation hooks** run after HTTP response
+
+This maintains backward compatibility while providing control over both sides of the remote operation.
+
+#### Layer 2: Server-Side Configuration (Endpoint-Specific)
+
+Server-side behavior (inference, validation) is configured on the SPARQL endpoint itself:
+
+- **GraphDB**: Configure inference rulesets in repository settings
+- **Fuseki**: Configure reasoners in server configuration
+- **Stardog**: Use stored procedures and triggers
+
+el-rdf can send **parameters** to trigger server-side features via HTTP headers or query parameters.
+
+### Implementation: Enhanced Hook Types
+
+Extend the hook system to support execution phases:
+
+```elisp
+(defun make-remote-graph (endpoint &optional name repository auth)
+  "Create a remote RDF graph backed by a SPARQL endpoint."
+  `((type . remote)
+    (endpoint . ,endpoint)
+    (repository . ,(or repository "default"))
+    (auth . ,auth)
+    (cache . ,(make-hash-table :test 'equal))
+    (prefixes . ())
+    (name . ,name)
+    ;; Enhanced hook system with phases
+    (hooks . ((pre-add-hooks . ,(list))      ; Run BEFORE remote operation
+              (add-hooks . ,(list))          ; Run AFTER remote operation (backward compat)
+              (pre-delete-hooks . ,(list))
+              (delete-hooks . ,(list))
+              (pre-query-hooks . ,(list))
+              (query-hooks . ,(list))))
+    ;; Server-side parameters (sent to endpoint)
+    (server-params . ((inference . nil)      ; Enable inference?
+                      (reasoning-level . nil) ; RDFS, OWL, etc.
+                      (validate . nil)))))   ; Server-side validation?
+```
+
+### Hook Execution Flow for Remote Graphs
+
+```elisp
+(defun add-triples--remote (triplist graph)
+  "Add triples to remote graph with client-side hooks."
+
+  ;; 1. Run PRE-add hooks (client-side)
+  (let ((pre-hooks (cdr (assoc 'pre-add-hooks (cdr (assoc 'hooks graph))))))
+    (mapc (lambda (hook)
+            (funcall hook graph 'add-triples triplist))
+          pre-hooks))
+
+  ;; 2. Prepare SPARQL update with server-side parameters
+  (let* ((insert-query (el-rdf--triples-to-sparql-insert triplist))
+         (server-params (alist-get 'server-params graph))
+         ;; Add inference parameter if enabled
+         (headers (if (alist-get 'inference server-params)
+                     '(("Content-Type" . "application/sparql-update")
+                       ("X-GraphDB-Reasoning" . "true"))
+                   '(("Content-Type" . "application/sparql-update")))))
+
+    ;; 3. Send to remote endpoint
+    (el-rdf--sparql-update insert-query graph headers)
+
+    ;; 4. Run POST-add hooks (client-side, after operation)
+    (let ((post-hooks (cdr (assoc 'add-hooks (cdr (assoc 'hooks graph))))))
+      (mapc (lambda (hook)
+              (funcall hook graph 'add-triples triplist))
+            post-hooks))))
+```
+
+### Configuration API
+
+#### Client-Side Hooks (Standard)
+
+```elisp
+;; Add pre-operation hook (runs before HTTP request)
+(add-hook-to-graph graph 'pre-add-hooks #'my-validation-hook)
+
+;; Add post-operation hook (runs after HTTP response)
+(add-hook-to-graph graph 'add-hooks #'my-llm-hook)
+```
+
+#### Server-Side Parameters
+
+```elisp
+;; Enable server-side inference
+(el-rdf-set-server-param graph 'inference t)
+(el-rdf-set-server-param graph 'reasoning-level 'rdfs)
+
+;; Implementation:
+(defun el-rdf-set-server-param (graph param value)
+  "Set a server-side parameter for remote GRAPH.
+Parameters are sent to the endpoint to trigger server-side features."
+  (let ((params (alist-get 'server-params graph)))
+    (setf (alist-get param params) value)))
+```
+
+### Example: LLM Hook on Remote Graph
+
+```elisp
+;; Create remote graph
+(setq my-graph (make-remote-graph "http://localhost:7200"
+                                  "knowledge-base"
+                                  "test-repo"))
+
+;; Enable server-side RDFS inference
+(el-rdf-set-server-param my-graph 'inference t)
+(el-rdf-set-server-param my-graph 'reasoning-level 'rdfs)
+
+;; Add client-side LLM hook (runs after triples are stored remotely)
+(add-hook-to-graph my-graph 'add-hooks
+  (lambda (graph operation data)
+    (when (eq operation 'add-triples)
+      ;; This runs in Emacs after remote storage succeeds
+      (let ((entities (extract-entities-via-llm data)))
+        (message "LLM extracted: %S" entities)))))
+
+;; Now when we add triples:
+(add-triples '((alice friend bob)
+               (bob worksAt acme-corp)) my-graph)
+
+;; Execution flow:
+;; 1. Pre-hooks run (none in this example)
+;; 2. SPARQL INSERT sent to GraphDB with inference enabled
+;; 3. GraphDB stores triples and computes RDFS inferences
+;; 4. Post-hooks run: LLM analyzes triples client-side
+```
+
+### Backward Compatibility
+
+For **local graphs**, nothing changes:
+- Existing hooks work exactly as before
+- `add-hooks` run after triples are added to in-memory indexes
+- No pre/post distinction needed
+
+For **remote graphs**:
+- Existing `add-hooks` behave as post-operation hooks (backward compatible)
+- New `pre-add-hooks` provide pre-operation control
+- Server-side features are opt-in via `server-params`
+
+### Impact on Implementation
+
+This hook architecture affects:
+
+1. **Phase 1** - Remote graph constructor needs `pre-*-hooks` and `server-params`
+2. **Phase 3** - HTTP layer needs to send server parameters as headers
+3. **Phase 4** - Dispatch layer runs pre-hooks → operation → post-hooks
+4. **Phase 5** - Tests for hook execution order and server params
+5. **Phase 6** - Documentation of client vs server-side operations
+
 ## Implementation Plan
 
 ### Phase 1: Foundation
@@ -172,10 +371,17 @@ AUTH: Optional authentication alist '((username . \"user\") (password . \"pass\"
     (cache . ,(make-hash-table :test 'equal))
     (prefixes . ())
     (name . ,name)
-    ;; Remote graphs support hooks too
-    (hooks . ((add-hooks . ,(list))
+    ;; Enhanced hook system with pre/post phases
+    (hooks . ((pre-add-hooks . ,(list))      ; Before HTTP request
+              (add-hooks . ,(list))          ; After HTTP response
+              (pre-delete-hooks . ,(list))
               (delete-hooks . ,(list))
-              (query-hooks . ,(list))))))
+              (pre-query-hooks . ,(list))
+              (query-hooks . ,(list))))
+    ;; Server-side parameters (sent to endpoint)
+    (server-params . ((inference . nil)      ; Enable inference?
+                      (reasoning-level . nil) ; RDFS, OWL, etc.
+                      (validate . nil)))))   ; Server-side validation?
 ```
 
 #### 1.4 Add Helper Predicates
@@ -192,6 +398,28 @@ AUTH: Optional authentication alist '((username . \"user\") (password . \"pass\"
 (defun remote-graph-p (graph)
   "Return non-nil if GRAPH is a remote graph."
   (eq (graph-type graph) 'remote))
+```
+
+#### 1.5 Server Parameter Management
+
+```elisp
+(defun el-rdf-set-server-param (graph param value)
+  "Set a server-side parameter for remote GRAPH.
+Parameters are sent to the endpoint to trigger server-side features.
+
+Common parameters:
+  inference - Enable inference/reasoning (t/nil)
+  reasoning-level - Level of reasoning ('rdfs, 'owl, etc.)
+  validate - Enable server-side validation (t/nil)"
+  (when (remote-graph-p graph)
+    (let* ((params-entry (assoc 'server-params graph))
+           (params (cdr params-entry)))
+      (setf (alist-get param params) value))))
+
+(defun el-rdf-get-server-param (graph param)
+  "Get a server-side parameter from remote GRAPH."
+  (when (remote-graph-p graph)
+    (alist-get param (alist-get 'server-params graph))))
 ```
 
 ### Phase 2: SPARQL Translation Layer
@@ -293,13 +521,25 @@ VARIABLES: List of variables to select (e.g., ($x $y))"
 ```elisp
 (defun el-rdf--sparql-update (update-query graph)
   "Execute a SPARQL UPDATE query against remote GRAPH.
-Returns t on success, signals error on failure."
+Returns t on success, signals error on failure.
+Sends server-params as HTTP headers to trigger server-side features."
   (let* ((endpoint (alist-get 'endpoint graph))
          (repository (alist-get 'repository graph))
          (auth (alist-get 'auth graph))
+         (server-params (alist-get 'server-params graph))
          (update-url (format "%s/repositories/%s/statements"
                             endpoint repository))
          (headers `(("Content-Type" . "application/sparql-update"))))
+
+    ;; Add server-side parameter headers
+    (when server-params
+      ;; GraphDB-specific inference header
+      (when (alist-get 'inference server-params)
+        (push '("X-GraphDB-Reasoning" . "true") headers))
+      ;; Could add more endpoint-specific headers here
+      (let ((reasoning-level (alist-get 'reasoning-level server-params)))
+        (when reasoning-level
+          (push `("X-Reasoning-Level" . ,(symbol-name reasoning-level)) headers))))
 
     ;; Add auth if provided
     (when auth
@@ -436,14 +676,22 @@ Original implementation from add-triple."
           add-hooks)))
 
 (defun add-triples--remote (triplist graph)
-  "Add multiple triples to remote graph via SPARQL INSERT."
-  ;; More efficient: batch all triples into one INSERT
+  "Add multiple triples to remote graph via SPARQL INSERT.
+Executes pre-add hooks, sends HTTP request, then executes post-add hooks."
+
+  ;; 1. Run PRE-add hooks (client-side, before HTTP request)
+  (let ((pre-hooks (cdr (assoc 'pre-add-hooks (cdr (assoc 'hooks graph))))))
+    (mapc (lambda (hook) (funcall hook graph 'add-triples triplist))
+          pre-hooks))
+
+  ;; 2. Prepare and send SPARQL UPDATE (batched for efficiency)
   (let ((insert-query (el-rdf--triples-to-sparql-insert triplist)))
-    (el-rdf--sparql-update insert-query graph)
-    ;; Call add-hooks
-    (let ((add-hooks (cdr (assoc 'add-hooks (cdr (assoc 'hooks graph))))))
-      (mapc (lambda (hook) (funcall hook graph 'add-triples triplist))
-            add-hooks))))
+    (el-rdf--sparql-update insert-query graph))
+
+  ;; 3. Run POST-add hooks (client-side, after HTTP response)
+  (let ((post-hooks (cdr (assoc 'add-hooks (cdr (assoc 'hooks graph))))))
+    (mapc (lambda (hook) (funcall hook graph 'add-triples triplist))
+          post-hooks)))
 
 (defun add-triples (triplist graph)
   "Add multiple triples to GRAPH (local or remote)."
@@ -583,6 +831,80 @@ Requires a SPARQL endpoint at http://localhost:7200."
     (should (ask '((alice friend bob)) graph))))
 ```
 
+#### 5.4 Hook Execution Order Tests
+
+```elisp
+(ert-deftest test-remote-graph-hook-execution-order ()
+  "Test that hooks execute in correct order for remote graphs."
+  :tags '(:integration :remote)
+  (skip-unless (el-rdf--endpoint-available-p "http://localhost:7200"))
+
+  (let ((execution-log '())
+        (remote-graph (make-remote-graph "http://localhost:7200"
+                                         "test-graph"
+                                         "test-repo")))
+
+    ;; Add pre-hook
+    (add-hook-to-graph remote-graph 'pre-add-hooks
+      (lambda (graph op data)
+        (push 'pre-hook execution-log)))
+
+    ;; Add post-hook
+    (add-hook-to-graph remote-graph 'add-hooks
+      (lambda (graph op data)
+        (push 'post-hook execution-log)))
+
+    ;; Execute operation
+    (add-triples '((alice friend bob)) remote-graph)
+
+    ;; Check execution order: should be (post-hook pre-hook) due to push
+    (should (equal execution-log '(post-hook pre-hook)))))
+
+(ert-deftest test-client-side-llm-hook ()
+  "Test that LLM hooks run client-side, not on server."
+  :tags '(:integration :remote)
+  (skip-unless (el-rdf--endpoint-available-p "http://localhost:7200"))
+
+  (let ((llm-called nil)
+        (remote-graph (make-remote-graph "http://localhost:7200"
+                                         "test-graph"
+                                         "test-repo")))
+
+    ;; Add client-side LLM hook (simulated)
+    (add-hook-to-graph remote-graph 'add-hooks
+      (lambda (graph op data)
+        (setq llm-called t)
+        ;; Simulate LLM call - this should happen in Emacs, not on server
+        (message "LLM analyzing: %S" data)))
+
+    ;; Execute operation
+    (add-triples '((alice friend bob)) remote-graph)
+
+    ;; Verify hook was called client-side
+    (should llm-called)))
+
+(ert-deftest test-server-side-inference-params ()
+  "Test that server parameters are sent as HTTP headers."
+  :tags '(:integration :remote)
+  (skip-unless (el-rdf--endpoint-available-p "http://localhost:7200"))
+
+  (let ((remote-graph (make-remote-graph "http://localhost:7200"
+                                         "test-graph"
+                                         "test-repo")))
+
+    ;; Enable server-side inference
+    (el-rdf-set-server-param remote-graph 'inference t)
+    (el-rdf-set-server-param remote-graph 'reasoning-level 'rdfs)
+
+    ;; Verify params are set
+    (should (eq (el-rdf-get-server-param remote-graph 'inference) t))
+    (should (eq (el-rdf-get-server-param remote-graph 'reasoning-level) 'rdfs))
+
+    ;; Add triples - headers should be sent with inference enabled
+    ;; (actual header verification would require mocking or inspection)
+    (add-triples '((alice rdf:type foaf:Person)) remote-graph)))
+```
+
 ### Phase 6: Documentation
 
 #### 6.1 Update README.org
@@ -638,8 +960,10 @@ Ensure all new functions have comprehensive docstrings.
 ### Phase 1: Foundation
 - [ ] Update Package-Requires: replace `request` with `plz`
 - [ ] Add `(type . local)` to `make-graph`
-- [ ] Implement `make-remote-graph`
+- [ ] Implement `make-remote-graph` with enhanced hook system (pre/post hooks)
+- [ ] Add `server-params` field to remote graphs
 - [ ] Implement `graph-type`, `local-graph-p`, `remote-graph-p`
+- [ ] Implement `el-rdf-set-server-param` and `el-rdf-get-server-param`
 
 ### Phase 2: SPARQL Translation
 - [ ] Implement `el-rdf--term-to-sparql`
@@ -651,32 +975,46 @@ Ensure all new functions have comprehensive docstrings.
 - [ ] Implement `el-rdf--extract-variables`
 
 ### Phase 3: HTTP Communication
-- [ ] Implement `el-rdf--sparql-update`
+- [ ] Implement `el-rdf--sparql-update` with server-params header support
 - [ ] Implement `el-rdf--sparql-query`
 - [ ] Implement `el-rdf--parse-sparql-results`
 - [ ] Implement `el-rdf--sparql-value-to-term`
 - [ ] Add authentication support
 - [ ] Add error handling with retries
+- [ ] Support GraphDB-specific inference headers (X-GraphDB-Reasoning)
 
 ### Phase 4: Dispatch Layer
 - [ ] Refactor `add-triple` → `add-triple--local` + `add-triple--remote` + dispatch
 - [ ] Refactor `add-triples` → `add-triples--local` + `add-triples--remote` + dispatch
+- [ ] Implement pre-hook execution in `add-triples--remote` (before HTTP)
+- [ ] Implement post-hook execution in `add-triples--remote` (after HTTP)
 - [ ] Refactor `delete-triple` → `delete-triple--local` + `delete-triple--remote` + dispatch
 - [ ] Refactor `delete-triples` → `delete-triples--local` + `delete-triples--remote` + dispatch
+- [ ] Implement pre/post-hook execution for delete operations
 - [ ] Refactor `graph-query` → `graph-query--local` + `graph-query--remote` + dispatch
-- [ ] Ensure hooks work for both local and remote graphs
+- [ ] Implement pre/post-hook execution for query operations
+- [ ] Ensure backward compatibility: existing hooks work as post-operation hooks
 
 ### Phase 5: Testing
 - [ ] Unit tests for SPARQL translation functions
 - [ ] Unit tests for helper predicates
+- [ ] Unit tests for server-param functions
 - [ ] Integration tests with real SPARQL endpoint (tagged)
 - [ ] Backward compatibility tests
-- [ ] Hook execution tests for remote graphs
+- [ ] Hook execution order tests for remote graphs (pre → operation → post)
+- [ ] Test that existing hooks work as post-operation hooks (backward compat)
+- [ ] Test server-side inference parameter passing
+- [ ] Test client-side hook execution (LLM calls, validation)
 
 ### Phase 6: Documentation
 - [ ] Update README.org with remote graph examples
 - [ ] Add docstrings to all new functions
+- [ ] Document hook architecture: client-side vs server-side operations
+- [ ] Document pre-hooks vs post-hooks with examples
+- [ ] Document server-params (inference, reasoning-level, etc.)
 - [ ] Create examples directory with remote graph usage
+- [ ] Example: LLM hook on remote graph
+- [ ] Example: Server-side inference configuration
 - [ ] Document supported SPARQL endpoints
 - [ ] Document authentication configuration
 
