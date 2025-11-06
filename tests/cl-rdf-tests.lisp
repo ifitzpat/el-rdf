@@ -1084,8 +1084,8 @@
       (is (= 2 (length cleaned)))
       (is (not (assoc t (first cleaned))))
       (is (not (assoc t (second cleaned))))
-      (is (assoc '$s (first cleaned)))
-      (is (assoc '$p (first cleaned))))))
+      (is (not (null (assoc '$s (first cleaned)))))
+      (is (not (null (assoc '$p (first cleaned))))))))
 
 (test clean-bindings-empty-list
   "Test clean-bindings with empty list"
@@ -1137,10 +1137,10 @@
         (old '((($s . alice) ($age . 30)))))
     (let ((updated (update-bindings new old)))
       (is (= 1 (length updated)))
-      (is (assoc '$s (first updated)))
-      (is (assoc '$p (first updated)))
-      (is (assoc '$o (first updated)))
-      (is (assoc '$age (first updated))))))
+      (is (not (null (assoc '$s (first updated)))))
+      (is (not (null (assoc '$p (first updated)))))
+      (is (not (null (assoc '$o (first updated)))))
+      (is (not (null (assoc '$age (first updated))))))))
 
 (test update-bindings-reject-incompatible
   "Test update-bindings returns NIL on incompatible bindings"
@@ -1228,8 +1228,8 @@
       (is (= 2 (length result)))
       ;; Check structure: (((bindings)))
       (is (every #'consp result))
-      (is (assoc '$s (caar result)))
-      (is (assoc '$name (caar result))))))
+      (is (not (null (assoc '$s (caar result)))))
+      (is (not (null (assoc '$name (caar result))))))))
 
 (test graph-query-multi-clause
   "Test graph-query with multiple clauses"
@@ -1242,9 +1242,9 @@
                                  ($s foaf@age $age))
                                graph)))
       (is (= 1 (length result)))
-      (is (assoc '$s (caar result)))
-      (is (assoc '$name (caar result)))
-      (is (assoc '$age (caar result)))
+      (is (not (null (assoc '$s (caar result)))))
+      (is (not (null (assoc '$name (caar result)))))
+      (is (not (null (assoc '$age (caar result)))))
       (is (equal 'alice (cdr (assoc '$s (caar result))))))))
 
 (test graph-query-no-match-signals-error
@@ -1270,12 +1270,12 @@
       (let ((alice-result (find 'alice result
                                 :key (lambda (r) (cdr (assoc '$s (car r)))))))
         (is (not (null alice-result)))
-        (is (assoc '$age (car alice-result))))
+        (is (not (null (assoc '$age (car alice-result))))))
       ;; Bob should have only name (age was optional)
       (let ((bob-result (find 'bob result
                               :key (lambda (r) (cdr (assoc '$s (car r)))))))
         (is (not (null bob-result)))
-        (is (assoc '$name (car bob-result)))))))
+        (is (not (null (assoc '$name (car bob-result)))))))))
 
 (test graph-query-optional-clause-failure
   "Test graph-query with OPTIONAL clause that doesn't match"
@@ -3082,8 +3082,8 @@ someProperty schema:label \"some property\" ." out))
           (let ((results (graph-query '((($s foaf@name $name))) remote)))
             (is (= 2 (length results)))
             ;; Check bindings structure
-            (is (assoc '$s (first results)))
-            (is (assoc '$name (first results)))))
+            (is (not (null (assoc '$s (first results)))))
+            (is (not (null (assoc '$name (first results)))))))
 
       ;; Cleanup
       (stop-server)
