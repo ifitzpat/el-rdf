@@ -1269,12 +1269,12 @@
       ;; Alice should have both name and age
       (let ((alice-result (find 'alice result
                                 :key (lambda (r) (cdr (assoc '$s (car r)))))))
-        (is alice-result)
+        (is (not (null alice-result)))
         (is (assoc '$age (car alice-result))))
       ;; Bob should have only name (age was optional)
       (let ((bob-result (find 'bob result
                               :key (lambda (r) (cdr (assoc '$s (car r)))))))
-        (is bob-result)
+        (is (not (null bob-result)))
         (is (assoc '$name (car bob-result)))))))
 
 (test graph-query-optional-clause-failure
